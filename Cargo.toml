@@ -1,0 +1,17 @@
+[package]
+name = "mctp-rs"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+espi = ["dep:espi-device"]
+
+[dependencies]
+heapless = "0.8.0"
+espi-device = { git = "https://github.com/OpenDevicePartnership/haf-ec-service", optional = true }
+bit-register = { git = "https://github.com/OpenDevicePartnership/odp-utilities", package = "bit-register" }
+num_enum = "0.7.4"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["macros", "rt"] }
