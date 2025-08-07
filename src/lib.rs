@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 // #![allow(unused_variables)]
 
+mod control_command;
 mod endpoint_id;
 mod mctp_command_code;
 mod mctp_completion_code;
@@ -12,6 +13,11 @@ use bit_register::bit_register;
 use core::marker::PhantomData;
 use endpoint_id::EndpointId;
 
+use crate::control_command::{
+    ControlCommandBuffer, ControlCommandRequest as _, ControlCommandResponse as _, GetEndpointId,
+    GetEndpointIdRequest, GetEndpointIdResponse, SetEndpointId, SetEndpointIdRequest,
+    SetEndpointIdResponse,
+};
 use crate::mctp_command_code::MctpCommandCode;
 use crate::mctp_completion_code::MctpCompletionCode;
 use crate::mctp_message_type::MctpMessageType;
@@ -68,29 +74,41 @@ mod tests_1 {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct MctpMessageBody<'packet> {
-    pub header_and_body: MctpMessageHeaderAndBody<'packet>,
+pub struct MctpMessageBody<'buffer> {
+    pub header_and_body: MctpMessageHeaderAndBody<'buffer>,
     pub message_integrity_check: Option<u8>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum MctpMessageHeaderAndBody<'packet> {
+pub enum MctpMessageHeaderAndBody<'buffer> {
     Control {
         header: MctpControlMessageHeaderBitRegister,
         body: MctpControlMessageBody,
     },
     VendorDefinedPci {
-        body: &'packet [u8],
+        body: &'buffer [u8],
     },
     VendorDefinedIana {
-        body: &'packet [u8],
+        body: &'buffer [u8],
     },
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MctpControlMessageBody {
-    GetEndpointId,
-    SetEndpointId,
+    Request(MctpControlMessageRequest),
+    Response(MctpControlMessageResponse),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum MctpControlMessageRequest {
+    GetEndpointId(GetEndpointIdRequest),
+    SetEndpointId(SetEndpointIdRequest),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum MctpControlMessageResponse {
+    GetEndpointId(GetEndpointIdResponse),
+    SetEndpointId(SetEndpointIdResponse),
 }
 
 bit_register! {
@@ -166,7 +184,8 @@ enum ProtocolError {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum MctpPacketError<MediumError: core::fmt::Debug + Copy + Clone + PartialEq + Eq> {
-    ParseError(&'static str),
+    HeaderParseError(&'static str),
+    CommandParseError(&'static str),
     ProtocolError(ProtocolError),
     MediumError(MediumError),
 }
@@ -271,13 +290,15 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
         let buffer_idx = state.packet_assembly_buffer_index;
         let packet_size = medium_frame.packet_size();
         if packet_size < 4 {
-            return Err(MctpPacketError::ParseError(
+            return Err(MctpPacketError::HeaderParseError(
                 "transport frame indicated packet length < 4",
             ));
         }
         let packet_size = packet_size - 4; // to account for the transport header
         if packet.len() < packet_size {
-            return Err(MctpPacketError::ParseError("packet.len() < packet_size"));
+            return Err(MctpPacketError::HeaderParseError(
+                "packet.len() < packet_size",
+            ));
         }
         self.packet_assembly_buffer[buffer_idx..buffer_idx + packet_size]
             .copy_from_slice(&packet[..packet_size]);
@@ -302,10 +323,10 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
         packet: &'packet [u8],
     ) -> Result<(MctpTransportHeader, &'packet [u8]), MctpPacketError<M::Error>> {
         let transport_header_value = u32::from_be_bytes(packet[0..4].try_into().map_err(|_| {
-            MctpPacketError::ParseError("Packet is too small, cannot parse transport header")
+            MctpPacketError::HeaderParseError("Packet is too small, cannot parse transport header")
         })?);
         let transport_header = MctpTransportHeader::try_from(transport_header_value)
-            .map_err(|_| MctpPacketError::ParseError("Invalid transport header"))?;
+            .map_err(|_| MctpPacketError::HeaderParseError("Invalid transport header"))?;
         let packet = &packet[4..];
         Ok((transport_header, packet))
     }
@@ -316,22 +337,20 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
     ) -> Result<MctpMessageBody<'s>, MctpPacketError<M::Error>> {
         // first four bytes are the message header, parse with MctpMessageHeaderBitRegister
         // to figure out the type, then based on that, parse the type specific header
-        let header_u32 = u32::from_be_bytes(
-            packet[0..4]
-                .try_into()
-                .map_err(|_| MctpPacketError::ParseError("packet < 4 bytes for message header"))?,
-        );
+        let header_u32 = u32::from_be_bytes(packet[0..4].try_into().map_err(|_| {
+            MctpPacketError::HeaderParseError("packet < 4 bytes for message header")
+        })?);
         let header = MctpMessageHeaderBitRegister::try_from(header_u32)
-            .map_err(MctpPacketError::ParseError)?;
+            .map_err(MctpPacketError::HeaderParseError)?;
         let packet = &packet[4..];
 
         let header_and_body = match header.message_type {
             MctpMessageType::MctpControl => {
                 let header = MctpControlMessageHeaderBitRegister::try_from(header_u32)
-                    .map_err(MctpPacketError::ParseError)?;
+                    .map_err(MctpPacketError::HeaderParseError)?;
 
-                extern crate std;
-                std::println!("header: {:#X?}", header);
+                // extern crate std;
+                // std::println!("header: {:#X?}", header);
 
                 // completion code is only present on reponse message
                 if header.request_bit == 1 && header.completion_code != MctpCompletionCode::Success
@@ -343,7 +362,11 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
 
                 MctpMessageHeaderAndBody::Control {
                     header,
-                    body: self.parse_control_message_body(header.command_code, packet)?,
+                    body: if header.request_bit == 1 {
+                        self.parse_control_request_message_body(header.command_code, packet)?
+                    } else {
+                        self.parse_control_response_message_body(header.command_code, packet)?
+                    },
                 }
             }
             MctpMessageType::VendorDefinedIana => {
@@ -352,7 +375,7 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
             MctpMessageType::VendorDefinedPci => {
                 MctpMessageHeaderAndBody::VendorDefinedPci { body: packet }
             }
-            _ => return Err(MctpPacketError::ParseError("Invalid message type")),
+            _ => return Err(MctpPacketError::HeaderParseError("Invalid message type")),
         };
 
         // TODO - compute message integrity check if header.integrity_check is set
@@ -362,25 +385,58 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
         })
     }
 
-    fn parse_control_message_body(
+    fn parse_control_request_message_body(
         &self,
         command_code: MctpCommandCode,
-        _body: &[u8],
+        body: &[u8],
     ) -> Result<MctpControlMessageBody, MctpPacketError<M::Error>> {
         // TODO - parse the body of the message
-        Ok(match command_code {
-            MctpCommandCode::GetEndpointId => MctpControlMessageBody::GetEndpointId,
-            MctpCommandCode::SetEndpointId => MctpControlMessageBody::SetEndpointId,
+        Ok(MctpControlMessageBody::Request(match command_code {
+            MctpCommandCode::GetEndpointId => MctpControlMessageRequest::GetEndpointId(
+                GetEndpointIdRequest::deserialize(body)
+                    .map_err(MctpPacketError::CommandParseError)?,
+            ),
+            MctpCommandCode::SetEndpointId => MctpControlMessageRequest::SetEndpointId(
+                SetEndpointIdRequest::deserialize(body)
+                    .map_err(MctpPacketError::CommandParseError)?,
+            ),
             _ => {
-                return Err(MctpPacketError::ParseError("Invalid control command code"));
+                return Err(MctpPacketError::HeaderParseError(
+                    "Invalid control command code",
+                ));
             }
-        })
+        }))
+    }
+
+    fn parse_control_response_message_body(
+        &self,
+        command_code: MctpCommandCode,
+        body: &[u8],
+    ) -> Result<MctpControlMessageBody, MctpPacketError<M::Error>> {
+        Ok(MctpControlMessageBody::Response(match command_code {
+            MctpCommandCode::GetEndpointId => MctpControlMessageResponse::GetEndpointId(
+                GetEndpointIdResponse::deserialize(body)
+                    .map_err(MctpPacketError::CommandParseError)?,
+            ),
+            MctpCommandCode::SetEndpointId => MctpControlMessageResponse::SetEndpointId(
+                SetEndpointIdResponse::deserialize(body)
+                    .map_err(MctpPacketError::CommandParseError)?,
+            ),
+            _ => {
+                return Err(MctpPacketError::HeaderParseError(
+                    "Invalid control command code",
+                ));
+            }
+        }))
     }
 }
 
 #[cfg(test)]
-mod tests_3 {
-    use crate::medium::MctpMediumFrame;
+mod mctp_context_tests {
+    use crate::{
+        control_command::{EndpointIdType, EndpointType},
+        medium::MctpMediumFrame,
+    };
 
     use super::*;
 
@@ -424,6 +480,10 @@ mod tests_3 {
         0b0000_0000, // rq, d, rsvd, instance id
         0b0000_0010, // command code (2: get endpoint id)
         0b0000_0000, // completion code
+        // message body:
+        0b0000_1110, // endpoint id (14)
+        0b0000_0001, // endpoint type (simple = 0b00) / endpoint id type (static eid supported = 0b01)
+        0b1111_0000, // medium specific
     ]);
 
     const EMPTY_PACKET_EOM: Packet = Packet(&[
@@ -435,7 +495,7 @@ mod tests_3 {
     ]);
 
     #[test]
-    fn test_mctp_packet_context_split_over_two_packets() {
+    fn split_over_two_packets() {
         let mut buffer = [0; 1024];
         let mut context: MctpPacketContext<'_, TestMedium> =
             MctpPacketContext::<TestMedium>::new(&mut buffer);
@@ -455,7 +515,14 @@ mod tests_3 {
                         command_code: MctpCommandCode::GetEndpointId,
                         ..Default::default()
                     },
-                    body: MctpControlMessageBody::GetEndpointId,
+                    body: MctpControlMessageBody::Response(
+                        MctpControlMessageResponse::GetEndpointId(GetEndpointIdResponse {
+                            endpoint_id: EndpointId::Id(14),
+                            endpoint_type: EndpointType::Simple,
+                            endpoint_id_type: EndpointIdType::Static,
+                            medium_specific: 240,
+                        }),
+                    ),
                 },
                 message_integrity_check: None,
             }))
@@ -463,7 +530,7 @@ mod tests_3 {
     }
 
     #[test]
-    fn test_mctp_packet_context_lacking_start_of_message() {
+    fn lacking_start_of_message() {
         let mut buffer = [0; 1024];
         let mut context: MctpPacketContext<'_, TestMedium> =
             MctpPacketContext::<TestMedium>::new(&mut buffer);
@@ -483,7 +550,7 @@ mod tests_3 {
     }
 
     #[test]
-    fn test_mctp_packet_context_repeated_start_of_message() {
+    fn repeated_start_of_message() {
         let mut buffer = [0; 1024];
         let mut context: MctpPacketContext<'_, TestMedium> =
             MctpPacketContext::<TestMedium>::new(&mut buffer);
@@ -502,6 +569,32 @@ mod tests_3 {
             ]),
             Err(MctpPacketError::ProtocolError(
                 ProtocolError::UnexpectedStartOfMessage,
+            ))
+        );
+    }
+
+    #[test]
+    fn message_tag_mismatch() {
+        let mut buffer = [0; 1024];
+        let mut context: MctpPacketContext<'_, TestMedium> =
+            MctpPacketContext::<TestMedium>::new(&mut buffer);
+
+        // message tag = 0
+        context
+            .on_receive_packet(GET_ENDPOINT_ID_PACKET_NO_EOM.0)
+            .unwrap();
+
+        // message tag = 1
+        assert_eq!(
+            context.on_receive_packet(&[
+                // transport header:
+                0b0000_0000, // mctp reserved, header version
+                0b0000_0000, // destination endpoint id
+                0b0000_0000, // source endpoint id
+                0b0101_0001, // som, eom, seq (1), to, tag (1)
+            ]),
+            Err(MctpPacketError::ProtocolError(
+                ProtocolError::MessageTagMismatch(0, 1),
             ))
         );
     }
