@@ -9,12 +9,20 @@ pub trait MctpMedium: Sized {
     /// deserialize the packet into the medium specific header and remainder of the packet -
     /// this includes the mctp transport header, and mctp packet payload
     fn deserialize(packet: &[u8]) -> Result<(Self::Frame, &[u8]), Self::Error>;
+    /// serialize the packet into the medium specific header and the payload
+    fn serialize<F>(
+        frame: Self::Frame,
+        buffer: &mut [u8],
+        message_writer: F,
+    ) -> Result<&[u8], Self::Error>
+    where
+        F: Fn(&mut [u8]) -> Result<&[u8], Self::Error>;
 }
 
 pub trait MctpMediumFrame<M: MctpMedium> {
     fn packet_size(&self) -> usize;
-    /// serialize the packet into the medium specific header and the payload
-    fn serialize_frame_header<'buf>(&self, buffer: &'buf mut [u8]) -> Result<&'buf [u8], M::Error>;
-    fn serialize_frame_trailer<'buf>(&self, buffer: &'buf mut [u8])
-    -> Result<&'buf [u8], M::Error>;
+    // serialize the packet into the medium specific header and the payload
+    // fn serialize<'buf>(&self, buffer: &'buf mut [u8]) -> Result<&'buf [u8], M::Error>;
+    // fn serialize_frame_trailer<'buf>(&self, buffer: &'buf mut [u8])
+    // -> Result<&'buf [u8], M::Error>;
 }

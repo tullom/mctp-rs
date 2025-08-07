@@ -23,13 +23,46 @@ impl MctpMedium for SmbusEspiMedium {
         let packet = &packet[..header.byte_count as usize];
         Ok((SmbusEspiMediumFrame { header, pec }, packet))
     }
+
+    fn serialize<F>(
+        frame: Self::Frame,
+        buffer: &mut [u8],
+        message_writer: F,
+    ) -> Result<&[u8], Self::Error>
+    where
+        F: Fn(&mut [u8]) -> Result<&[u8], Self::Error>,
+    {
+        // split off a buffer where we will write the header, the rest is the body
+        let (header_slice, body) = buffer.split_at_mut(4);
+        let body = message_writer(body)?;
+        let body_size = body.len();
+
+        // with the body written, construct the header
+        let header = SmbusEspiMediumHeader {
+            destination_slave_address: frame.header.source_slave_address,
+            source_slave_address: frame.header.destination_slave_address,
+            byte_count: body_size as u8,
+            command_code: SmbusCommandCode::MCTP,
+            ..Default::default()
+        };
+        let header_value = TryInto::<u32>::try_into(header)?;
+        header_slice.copy_from_slice(&header_value.to_be_bytes());
+
+        // with the header written, compute the PEC byte
+        let pec = smbus_pec::pec(&buffer[0..body_size + 4]);
+        buffer[body_size + 4] = pec;
+
+        // add 4 for frame header, add 1 for PEC byte
+        Ok(&buffer[0..body_size + 5])
+    }
 }
 
 #[repr(u8)]
 #[derive(
-    Debug, Copy, Clone, PartialEq, Eq, num_enum::IntoPrimitive, num_enum::TryFromPrimitive,
+    Debug, Copy, Clone, PartialEq, Eq, num_enum::IntoPrimitive, num_enum::TryFromPrimitive, Default,
 )]
 enum SmbusCommandCode {
+    #[default]
     MCTP = 0x0F,
 }
 impl TryFromBits<u32> for SmbusCommandCode {
@@ -51,7 +84,7 @@ impl NumBytes for SmbusCommandCode {
 }
 
 bit_register! {
-    #[derive(Copy, Clone, PartialEq, Eq)]
+    #[derive(Copy, Clone, PartialEq, Eq, Default)]
     struct SmbusEspiMediumHeader: little_endian u32 {
         pub destination_slave_address: u8 => [25:31],
         pub _reserved1: Zero => [24],
@@ -72,22 +105,24 @@ impl MctpMediumFrame<SmbusEspiMedium> for SmbusEspiMediumFrame {
         self.header.byte_count as usize
     }
 
-    fn serialize_frame_header<'buf>(
-        &self,
-        buffer: &'buf mut [u8],
-    ) -> Result<&'buf [u8], <SmbusEspiMedium as MctpMedium>::Error> {
-        let header_value = TryInto::<u32>::try_into(self.header)
-            .map_err(|_| "Failed to serialize smbus header")?;
-        if buffer.len() < 4 {
-            return Err("Buffer too small to serialize smbus header");
-        }
-        buffer[0..4].copy_from_slice(&header_value.to_be_bytes());
-        Ok(&buffer[4..])
-    }
-    fn serialize_frame_trailer<'buf>(
-        &self,
-        buffer: &'buf mut [u8],
-    ) -> Result<&'buf [u8], <SmbusEspiMedium as MctpMedium>::Error> {
-        todo!()
-    }
+    // fn serialize<'buf, E, F: Fn(&'buf mut [u8]) -> Result<&'buf [u8], E>>(
+    //     &self,
+    //     buffer: &'buf mut [u8],
+    //     transport_serializer: F,
+    // ) -> Result<&'buf [u8], <SmbusEspiMedium as MctpMedium>::Error> {
+    //     let header_value = TryInto::<u32>::try_into(self.header)
+    //         .map_err(|_| "Failed to serialize smbus header")?;
+    //     if buffer.len() < 4 {
+    //         return Err("Buffer too small to serialize smbus header");
+    //     }
+    //     buffer[0..4].copy_from_slice(&header_value.to_be_bytes());
+    //     Ok(&buffer[4..])
+    // }
+    // fn serialize_frame_trailer<'buf>(
+    //     &self,
+    //     buffer: &'buf mut [u8],
+    // ) -> Result<&'buf [u8], <SmbusEspiMedium as MctpMedium>::Error> {
+    //     // compute PEC byte
+    //     let pec = compute_pec
+    // }
 }
