@@ -74,7 +74,8 @@ mod tests_1 {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct MctpMessageBody<'buffer> {
+pub struct MctpMessage<'buffer, M: MctpMedium> {
+    pub medium_frame: M::Frame,
     pub header_and_body: MctpMessageHeaderAndBody<'buffer>,
     pub message_integrity_check: Option<u8>,
 }
@@ -223,7 +224,7 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
     pub fn on_receive_packet<'packet>(
         &mut self,
         packet: &'packet [u8],
-    ) -> Result<Option<MctpMessageBody<'_>>, MctpPacketError<M::Error>> {
+    ) -> Result<Option<MctpMessage<'_, M>>, MctpPacketError<M::Error>> {
         let (medium_frame, packet) =
             M::deserialize(packet).map_err(MctpPacketError::MediumError)?;
         let (transport_header, packet) = self.deserialize_transport_header(packet)?;
@@ -304,18 +305,22 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
             .copy_from_slice(&packet[..packet_size]);
         state.packet_assembly_buffer_index += packet_size;
 
-        let message_body = if transport_header.end_of_message == 1 {
+        let message = if transport_header.end_of_message == 1 {
             self.assembly_state = AssemblyState::Idle;
-            let message_body = self.parse_message_body(
+            let (message_body, message_integrity_check) = self.parse_message_body(
                 &self.packet_assembly_buffer[..state.packet_assembly_buffer_index],
             )?;
-            Some(message_body)
+            Some(MctpMessage {
+                medium_frame,
+                header_and_body: message_body,
+                message_integrity_check,
+            })
         } else {
             self.assembly_state = AssemblyState::Assembling(state);
             None
         };
 
-        Ok(message_body)
+        Ok(message)
     }
 
     fn deserialize_transport_header<'packet>(
@@ -334,7 +339,7 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
     fn parse_message_body<'s>(
         &'s self,
         packet: &'s [u8],
-    ) -> Result<MctpMessageBody<'s>, MctpPacketError<M::Error>> {
+    ) -> Result<(MctpMessageHeaderAndBody<'s>, Option<u8>), MctpPacketError<M::Error>> {
         // first four bytes are the message header, parse with MctpMessageHeaderBitRegister
         // to figure out the type, then based on that, parse the type specific header
         let header_u32 = u32::from_be_bytes(packet[0..4].try_into().map_err(|_| {
@@ -379,10 +384,7 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
         };
 
         // TODO - compute message integrity check if header.integrity_check is set
-        Ok(MctpMessageBody {
-            header_and_body,
-            message_integrity_check: None,
-        })
+        Ok((header_and_body, None))
     }
 
     fn parse_control_request_message_body(
@@ -440,7 +442,9 @@ mod mctp_context_tests {
 
     use super::*;
 
+    #[derive(Debug, PartialEq, Eq)]
     struct TestMedium;
+    #[derive(Debug, PartialEq, Eq)]
     struct TestMediumFrame(usize);
 
     impl MctpMedium for TestMedium {
@@ -507,7 +511,8 @@ mod mctp_context_tests {
 
         assert_eq!(
             context.on_receive_packet(EMPTY_PACKET_EOM.0),
-            Ok(Some(MctpMessageBody {
+            Ok(Some(MctpMessage {
+                medium_frame: TestMediumFrame(4),
                 header_and_body: MctpMessageHeaderAndBody::Control {
                     header: MctpControlMessageHeaderBitRegister {
                         integrity_check: 0,
@@ -597,5 +602,12 @@ mod mctp_context_tests {
                 ProtocolError::MessageTagMismatch(0, 1),
             ))
         );
+    }
+
+    #[test]
+    fn test_send_packet() {
+        let mut buffer = [0; 1024];
+        let mut context: MctpPacketContext<'_, TestMedium> =
+            MctpPacketContext::<TestMedium>::new(&mut buffer);
     }
 }

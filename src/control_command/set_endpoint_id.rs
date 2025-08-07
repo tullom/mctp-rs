@@ -9,8 +9,8 @@ pub struct SetEndpointId;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SetEndpointIdRequest {
-    operation: SetEndpointIdOperation,
-    endpoint_id: EndpointId,
+    pub operation: SetEndpointIdOperation,
+    pub endpoint_id: EndpointId,
 }
 
 #[repr(u8)]
