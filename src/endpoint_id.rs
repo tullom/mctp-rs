@@ -11,12 +11,19 @@ pub enum EndpointId {
     Id(u8),
 }
 
+impl TryFrom<u8> for EndpointId {
+    type Error = &'static str;
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Self::try_from_bits(value as u32)
+    }
+}
+
 impl TryFromBits<u32> for EndpointId {
     fn try_from_bits(bits: u32) -> Result<Self, &'static str> {
         match bits {
             0x00 => Ok(EndpointId::Null),
             0xFF => Ok(EndpointId::Broadcast),
-            0x08..=0x7F => Ok(EndpointId::Id(bits as u8)),
+            0x08..=0xFE => Ok(EndpointId::Id(bits as u8)),
             _ => Err("Invalid endpoint ID"),
         }
     }

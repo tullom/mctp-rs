@@ -1,12 +1,18 @@
+use crate::medium::{MctpMedium, MctpMediumFrame, MediumOrGenericError, util::Zero};
 use bit_register::{NumBytes, TryFromBits, TryIntoBits, bit_register};
 
-use crate::medium::{MctpMedium, MctpMediumFrame, util::Zero};
-
 struct SmbusEspiMedium;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+struct SmbusEspiReplyContext {
+    destination_slave_address: u8,
+    source_slave_address: u8,
+}
 
 impl MctpMedium for SmbusEspiMedium {
     type Frame = SmbusEspiMediumFrame;
     type Error = &'static str;
+    type ReplyContext = SmbusEspiReplyContext;
 
     fn deserialize(packet: &[u8]) -> Result<(Self::Frame, &[u8]), Self::Error> {
         let header_value = u32::from_be_bytes(
@@ -24,36 +30,50 @@ impl MctpMedium for SmbusEspiMedium {
         Ok((SmbusEspiMediumFrame { header, pec }, packet))
     }
 
-    fn serialize<F>(
-        frame: Self::Frame,
-        buffer: &mut [u8],
+    fn serialize<'buf, E, F>(
+        reply_context: Self::ReplyContext,
+        buffer: &'buf mut [u8],
         message_writer: F,
-    ) -> Result<&[u8], Self::Error>
+    ) -> Result<&'buf [u8], MediumOrGenericError<Self::Error, E>>
     where
-        F: Fn(&mut [u8]) -> Result<&[u8], Self::Error>,
+        F: for<'a> FnOnce(&'a mut [u8]) -> Result<usize, E>,
     {
-        // split off a buffer where we will write the header, the rest is the body
-        let (header_slice, body) = buffer.split_at_mut(4);
-        let body = message_writer(body)?;
-        let body_size = body.len();
+        // Reserve space for header (4 bytes) and PEC (1 byte)
+        if buffer.len() < 5 {
+            return Err(MediumOrGenericError::Medium(
+                "Buffer too small for smbus frame",
+            ));
+        }
 
-        // with the body written, construct the header
+        // split off a buffer where we will write the header, the rest is for body + PEC
+        let (header_slice, body) = buffer.split_at_mut(4);
+
+        // Write the body first
+        let body_len = message_writer(body).map_err(MediumOrGenericError::Generic)?;
+
+        // with the body has been written, construct the header
         let header = SmbusEspiMediumHeader {
-            destination_slave_address: frame.header.source_slave_address,
-            source_slave_address: frame.header.destination_slave_address,
-            byte_count: body_size as u8,
+            destination_slave_address: reply_context.source_slave_address,
+            source_slave_address: reply_context.destination_slave_address,
+            byte_count: body_len as u8,
             command_code: SmbusCommandCode::MCTP,
             ..Default::default()
         };
-        let header_value = TryInto::<u32>::try_into(header)?;
+        let header_value =
+            TryInto::<u32>::try_into(header).map_err(MediumOrGenericError::Medium)?;
         header_slice.copy_from_slice(&header_value.to_be_bytes());
 
         // with the header written, compute the PEC byte
-        let pec = smbus_pec::pec(&buffer[0..body_size + 4]);
-        buffer[body_size + 4] = pec;
+        let pec_value = smbus_pec::pec(&buffer[0..4 + body_len]);
+        buffer[4 + body_len] = pec_value as u8;
 
         // add 4 for frame header, add 1 for PEC byte
-        Ok(&buffer[0..body_size + 5])
+        Ok(&buffer[0..4 + body_len + 1])
+    }
+
+    // TODO - this is a guess, need to find the actual value from spec
+    fn mtu() -> usize {
+        32
     }
 }
 
@@ -95,14 +115,28 @@ bit_register! {
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Eq)]
 struct SmbusEspiMediumFrame {
     header: SmbusEspiMediumHeader,
     pec: u8,
 }
 
+impl SmbusEspiReplyContext {
+    fn new(frame: SmbusEspiMediumFrame) -> Self {
+        Self {
+            destination_slave_address: frame.header.destination_slave_address,
+            source_slave_address: frame.header.source_slave_address,
+        }
+    }
+}
+
 impl MctpMediumFrame<SmbusEspiMedium> for SmbusEspiMediumFrame {
     fn packet_size(&self) -> usize {
         self.header.byte_count as usize
+    }
+
+    fn reply_context(&self) -> SmbusEspiReplyContext {
+        SmbusEspiReplyContext::new(*self)
     }
 
     // fn serialize<'buf, E, F: Fn(&'buf mut [u8]) -> Result<&'buf [u8], E>>(
