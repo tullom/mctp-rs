@@ -12,7 +12,6 @@ mod mctp_transport_header;
 mod medium;
 
 use bit_register::bit_register;
-use core::marker::PhantomData;
 use endpoint_id::EndpointId;
 
 use crate::mctp_command_code::MctpCommandCode;
@@ -196,6 +195,7 @@ struct AssemblingState {
 
 #[derive(Debug, PartialEq, Eq)]
 struct SerializePacketState<'source, 'assembly, M: MctpMedium> {
+    medium: &'assembly M,
     reply_context: MctpReplyContext<M>,
     current_packet_num: u8,
     source_buffer: &'source [u8],
@@ -203,74 +203,78 @@ struct SerializePacketState<'source, 'assembly, M: MctpMedium> {
 }
 
 impl<'source, 'assembly, M: MctpMedium> SerializePacketState<'source, 'assembly, M> {
-    fn next(&'assembly mut self) -> Option<Result<&'assembly [u8], MctpPacketError<M::Error>>> {
+    fn next(&mut self) -> Option<Result<&[u8], MctpPacketError<M::Error>>> {
         if self.source_buffer.is_empty() {
             return None;
         }
 
-        let packet = M::serialize(
-            self.reply_context.medium_context.clone(),
-            self.assembly_buffer,
-            |buffer: &mut [u8]| {
-                let packet_size = M::mtu().min(buffer.len());
+        let packet = self
+            .medium
+            .serialize(
+                self.reply_context.medium_context.clone(),
+                self.assembly_buffer,
+                |buffer: &mut [u8]| {
+                    let packet_size = self.medium.max_message_body_size().min(buffer.len());
+                    if packet_size < 4 {
+                        return Err(MctpPacketError::SerializeError(
+                            "assembly buffer too small for mctp transport header",
+                        ));
+                    }
 
-                if packet_size < 4 {
-                    return Err(MctpPacketError::SerializeError(
-                        "assembly buffer too small for mctp transport header",
-                    ));
-                }
+                    let body_size = (packet_size - 4).min(self.source_buffer.len());
+                    let body = &self.source_buffer[..body_size];
+                    self.source_buffer = &self.source_buffer[body_size..];
 
-                let packet_size = packet_size.min(self.source_buffer.len());
+                    let start_of_message = if self.current_packet_num == 0 { 1 } else { 0 };
+                    let end_of_message = if self.source_buffer.is_empty() { 1 } else { 0 };
+                    let packet_sequence_number = self.reply_context.packet_sequence_number.inc();
+                    let transport_header = MctpTransportHeader {
+                        reserved: 0,
+                        header_version: 1,
+                        start_of_message,
+                        end_of_message,
+                        packet_sequence_number,
+                        tag_owner: 0,
+                        message_tag: self.reply_context.message_tag,
+                        source_endpoint_id: self.reply_context.destination_endpoint_id,
+                        destination_endpoint_id: self.reply_context.source_endpoint_id,
+                    };
+                    let transport_header_value: u32 = transport_header
+                        .try_into()
+                        .map_err(MctpPacketError::SerializeError)?;
 
-                let send_buffer = &self.source_buffer[..packet_size];
-                self.source_buffer = &self.source_buffer[packet_size..];
+                    // transport header is the first 4 bytes of the buffer
+                    buffer[0..4].copy_from_slice(&transport_header_value.to_be_bytes());
+                    // message body is the rest of the buffer, up to the packet size
+                    buffer[4..4 + body_size].copy_from_slice(body);
+                    Ok(4 + body_size)
+                },
+            )
+            // TODO - .into() for these error types
+            .map_err(|err| match err {
+                MediumOrGenericError::Medium(e) => MctpPacketError::MediumError(e),
+                MediumOrGenericError::Generic(e) => e,
+            });
 
-                // construct the transport header
-                let start_of_message = if self.current_packet_num == 0 { 1 } else { 0 };
-                let end_of_message = if self.source_buffer.is_empty() { 1 } else { 0 };
-                let packet_sequence_number = self.reply_context.packet_sequence_number.inc();
-                let transport_header = MctpTransportHeader {
-                    reserved: 0,
-                    header_version: 1,
-                    start_of_message,
-                    end_of_message,
-                    packet_sequence_number,
-                    tag_owner: 0,
-                    message_tag: self.reply_context.message_tag,
-                    source_endpoint_id: self.reply_context.destination_endpoint_id,
-                    destination_endpoint_id: self.reply_context.source_endpoint_id,
-                };
-                let transport_header_value: u32 = transport_header
-                    .try_into()
-                    .map_err(MctpPacketError::SerializeError)?;
-
-                buffer[0..4].copy_from_slice(&transport_header_value.to_be_bytes());
-                buffer[4..(4 + packet_size)].copy_from_slice(send_buffer);
-                Ok(4 + packet_size)
-            },
-        )
-        // TODO - .into() for these error types
-        .map_err(|err| match err {
-            MediumOrGenericError::Medium(e) => MctpPacketError::MediumError(e),
-            MediumOrGenericError::Generic(e) => e,
-        });
+        // Increment packet number for next call
+        self.current_packet_num += 1;
 
         Some(packet)
     }
 }
 
 struct MctpPacketContext<'buf, M: MctpMedium> {
-    packet_assembly_buffer: &'buf mut [u8],
     assembly_state: AssemblyState,
-    phantom: PhantomData<M>,
+    medium: M,
+    packet_assembly_buffer: &'buf mut [u8],
 }
 
 impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
-    pub fn new(packet_assembly_buffer: &'buf mut [u8]) -> Self {
+    pub fn new(medium: M, packet_assembly_buffer: &'buf mut [u8]) -> Self {
         Self {
-            packet_assembly_buffer,
+            medium,
             assembly_state: AssemblyState::Idle,
-            phantom: PhantomData,
+            packet_assembly_buffer,
         }
     }
 
@@ -278,8 +282,10 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
         &mut self,
         packet: &'packet [u8],
     ) -> Result<Option<MctpMessage<'_, M>>, MctpPacketError<M::Error>> {
-        let (medium_frame, packet) =
-            M::deserialize(packet).map_err(MctpPacketError::MediumError)?;
+        let (medium_frame, packet) = self
+            .medium
+            .deserialize(packet)
+            .map_err(MctpPacketError::MediumError)?;
         let (transport_header, packet) = self.deserialize_transport_header(packet)?;
 
         let mut state = match self.assembly_state {
@@ -455,6 +461,7 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
             }
         };
         Ok(SerializePacketState {
+            medium: &self.medium,
             reply_context,
             current_packet_num: 0,
             source_buffer: message,
@@ -470,7 +477,30 @@ mod mctp_context_tests {
     use pretty_assertions::assert_eq;
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]
-    struct TestMedium;
+    struct TestMedium {
+        header: &'static [u8],
+        trailer: &'static [u8],
+        mtu: usize,
+    }
+    impl TestMedium {
+        fn new() -> Self {
+            Self {
+                header: &[],
+                trailer: &[],
+                mtu: 32,
+            }
+        }
+        fn with_headers(mut self, header: &'static [u8], trailer: &'static [u8]) -> Self {
+            self.header = header;
+            self.trailer = trailer;
+            self
+        }
+        fn with_mtu(mut self, mtu: usize) -> Self {
+            self.mtu = mtu;
+            self
+        }
+    }
+
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]
     struct TestMediumFrame(usize);
 
@@ -478,31 +508,57 @@ mod mctp_context_tests {
         type Frame = TestMediumFrame;
         type Error = ();
         type ReplyContext = ();
-        fn deserialize(packet: &[u8]) -> Result<(Self::Frame, &[u8]), Self::Error> {
-            Ok((TestMediumFrame(packet.len()), packet))
+
+        fn deserialize<'buf>(
+            &self,
+            packet: &'buf [u8],
+        ) -> Result<(Self::Frame, &'buf [u8]), Self::Error> {
+            let packet_len = packet.len();
+
+            // check that header / trailer is present and correct
+            if packet[0..self.header.len()] != *self.header {
+                panic!("header mismatch");
+            }
+            if packet[packet_len - self.trailer.len()..packet_len] != *self.trailer {
+                panic!("trailer mismatch");
+            }
+
+            let packet = &packet[self.header.len()..packet_len - self.trailer.len()];
+            Ok((TestMediumFrame(packet_len), packet))
         }
-        fn mtu() -> usize {
-            32
+        fn max_message_body_size(&self) -> usize {
+            self.mtu
         }
         fn serialize<'buf, E, F>(
-            _reply_context: Self::ReplyContext,
+            &self,
+            _: Self::ReplyContext,
             buffer: &'buf mut [u8],
             message_writer: F,
         ) -> Result<&'buf [u8], MediumOrGenericError<Self::Error, E>>
         where
             F: for<'a> FnOnce(&'a mut [u8]) -> Result<usize, E>,
         {
-            // Use raw pointer approach to avoid borrow checker conflicts
-            let buffer_ptr = buffer.as_mut_ptr();
-            let buffer_len = buffer.len();
+            let header_len = self.header.len();
+            let trailer_len = self.trailer.len();
 
-            let size = {
-                let buffer_slice =
-                    unsafe { core::slice::from_raw_parts_mut(buffer_ptr, buffer_len) };
-                message_writer(buffer_slice).map_err(MediumOrGenericError::Generic)?
-            };
+            // Ensure buffer can fit at least headers and trailers
+            if buffer.len() < header_len + trailer_len {
+                return Err(MediumOrGenericError::Medium(()));
+            }
 
-            Ok(&buffer[..size])
+            // Calculate available space for message (respecting MTU)
+            let max_packet_size = self.mtu.min(buffer.len());
+            if max_packet_size < header_len + trailer_len {
+                return Err(MediumOrGenericError::Medium(()));
+            }
+            let max_message_size = max_packet_size - header_len - trailer_len;
+
+            buffer[0..header_len].copy_from_slice(self.header);
+            let size = message_writer(&mut buffer[header_len..header_len + max_message_size])
+                .map_err(MediumOrGenericError::Generic)?;
+            let len = header_len + size;
+            buffer[len..len + trailer_len].copy_from_slice(self.trailer);
+            Ok(&buffer[..len + trailer_len])
         }
     }
 
@@ -545,8 +601,7 @@ mod mctp_context_tests {
     #[test]
     fn split_over_two_packets() {
         let mut buffer = [0; 1024];
-        let mut context: MctpPacketContext<'_, TestMedium> =
-            MctpPacketContext::<TestMedium>::new(&mut buffer);
+        let mut context = MctpPacketContext::<TestMedium>::new(TestMedium::new(), &mut buffer);
 
         assert_eq!(
             context
@@ -586,8 +641,7 @@ mod mctp_context_tests {
     #[test]
     fn lacking_start_of_message() {
         let mut buffer = [0; 1024];
-        let mut context: MctpPacketContext<'_, TestMedium> =
-            MctpPacketContext::<TestMedium>::new(&mut buffer);
+        let mut context = MctpPacketContext::<TestMedium>::new(TestMedium::new(), &mut buffer);
 
         assert_eq!(
             context.receive_packet(&[
@@ -606,8 +660,7 @@ mod mctp_context_tests {
     #[test]
     fn repeated_start_of_message() {
         let mut buffer = [0; 1024];
-        let mut context: MctpPacketContext<'_, TestMedium> =
-            MctpPacketContext::<TestMedium>::new(&mut buffer);
+        let mut context = MctpPacketContext::<TestMedium>::new(TestMedium::new(), &mut buffer);
 
         context
             .receive_packet(GET_ENDPOINT_ID_PACKET_NO_EOM.0)
@@ -630,8 +683,7 @@ mod mctp_context_tests {
     #[test]
     fn message_tag_mismatch() {
         let mut buffer = [0; 1024];
-        let mut context: MctpPacketContext<'_, TestMedium> =
-            MctpPacketContext::<TestMedium>::new(&mut buffer);
+        let mut context = MctpPacketContext::<TestMedium>::new(TestMedium::new(), &mut buffer);
 
         // message tag = 0
         context
@@ -659,8 +711,10 @@ mod mctp_context_tests {
     #[test]
     fn test_send_packet() {
         let mut buffer = [0; 1024];
-        let mut context: MctpPacketContext<'_, TestMedium> =
-            MctpPacketContext::<TestMedium>::new(&mut buffer);
+        let mut context = MctpPacketContext::<TestMedium>::new(
+            TestMedium::new().with_headers(&[0xA, 0xB], &[0xC, 0xD]),
+            &mut buffer,
+        );
 
         let reply_context = MctpReplyContext {
             destination_endpoint_id: EndpointId::try_from(236).unwrap(),
@@ -676,15 +730,120 @@ mod mctp_context_tests {
         assert_eq!(
             packet,
             &[
-                // test header - none
+                // test header - 2 bytes
+                0xA,
+                0xB,
                 // mctp transport header
                 0b0000_0001, // mctp reserved, header version
                 192,         // destination endpoint id
                 236,         // source endpoint id
                 0b1110_0011, // som (1), eom (1), seq (2), tag owner (0), message tag (3)
-                0xA5,        // mctp body data - 1 byte
-                             // test trailer - none
+                // mctp body data - 1 byte
+                0xA5,
+                // test trailer - 2 bytes
+                0xC,
+                0xD,
             ]
         );
+    }
+
+    #[test]
+    fn test_send_packet_multi() {
+        let mut buffer = [0; 1024];
+        let mut context = MctpPacketContext::<TestMedium>::new(
+            TestMedium::new()
+                .with_headers(&[0xA, 0xB], &[0xC, 0xD])
+                // 4 bytes transport header + 4 bytes of data
+                .with_mtu(12),
+            &mut buffer,
+        );
+
+        let reply_context = MctpReplyContext {
+            destination_endpoint_id: EndpointId::try_from(236).unwrap(),
+            source_endpoint_id: EndpointId::try_from(192).unwrap(),
+            packet_sequence_number: MctpSequenceNumber::new(1),
+            message_tag: MctpMessageTag::try_from(3).unwrap(),
+            medium_context: (),
+        };
+
+        // 10 byte to send over 3 packets
+        let data_to_send = [0xA5, 0xB6, 0xC7, 0xD8, 0xE9, 0xFA, 0x0B, 0x1C, 0x2D, 0x3E];
+
+        let mut state = context
+            .serialize_packet(reply_context, &data_to_send)
+            .unwrap();
+
+        // First packet
+        let packet1 = state.next().unwrap().unwrap();
+        assert_eq!(
+            packet1,
+            &[
+                // test header - 2 bytes
+                0xA,
+                0xB,
+                // mctp transport header - 4 bytes
+                0b0000_0001, // mctp reserved, header version
+                192,         // destination endpoint id
+                236,         // source endpoint id
+                0b1010_0011, // som (1), eom (0), seq (2), tag owner (0), message tag (3)
+                // mctp body data - 4 bytes
+                0xA5,
+                0xB6,
+                0xC7,
+                0xD8,
+                // test trailer - 2 bytes
+                0xC,
+                0xD,
+            ]
+        );
+
+        // Second packet (middle packet with 4 bytes of data)
+        let packet2 = state.next().unwrap().unwrap();
+        assert_eq!(
+            packet2,
+            &[
+                // test header - 2 bytes
+                0xA,
+                0xB,
+                // mctp transport header - 4 bytes
+                0b0000_0001, // mctp reserved, header version
+                192,         // destination endpoint id
+                236,         // source endpoint id
+                0b0011_0011, // som (0), eom (0), seq (3), tag owner (0), message tag (3)
+                // mctp body data - 4 bytes
+                0xE9,
+                0xFA,
+                0x0B,
+                0x1C,
+                // test trailer - 2 bytes
+                0xC,
+                0xD,
+            ]
+        );
+
+        // Third packet (final packet with 2 bytes of data)
+        let packet3 = state.next().unwrap().unwrap();
+        assert_eq!(
+            packet3,
+            &[
+                // test header - 2 bytes
+                0xA,
+                0xB,
+                // mctp transport header - 4 bytes
+                0b0000_0001, // mctp reserved, header version
+                192,         // destination endpoint id
+                236,         // source endpoint id
+                0b0100_0011, // som (0), eom (1), seq (0), tag owner (0), message tag (3)
+                // mctp body data - 2 bytes
+                0x2D,
+                0x3E,
+                // test trailer - 2 bytes
+                0xC,
+                0xD,
+            ]
+        );
+
+        // Verify no more packets
+        assert!(state.next().is_none(), "Expected exactly 3 packets");
     }
 }

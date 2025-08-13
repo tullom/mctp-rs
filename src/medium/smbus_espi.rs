@@ -14,7 +14,10 @@ impl MctpMedium for SmbusEspiMedium {
     type Error = &'static str;
     type ReplyContext = SmbusEspiReplyContext;
 
-    fn deserialize(packet: &[u8]) -> Result<(Self::Frame, &[u8]), Self::Error> {
+    fn deserialize<'buf>(
+        &self,
+        packet: &'buf [u8],
+    ) -> Result<(Self::Frame, &'buf [u8]), Self::Error> {
         let header_value = u32::from_be_bytes(
             packet[0..4]
                 .try_into()
@@ -31,6 +34,7 @@ impl MctpMedium for SmbusEspiMedium {
     }
 
     fn serialize<'buf, E, F>(
+        &self,
         reply_context: Self::ReplyContext,
         buffer: &'buf mut [u8],
         message_writer: F,
@@ -72,7 +76,7 @@ impl MctpMedium for SmbusEspiMedium {
     }
 
     // TODO - this is a guess, need to find the actual value from spec
-    fn mtu() -> usize {
+    fn max_message_body_size(&self) -> usize {
         32
     }
 }
