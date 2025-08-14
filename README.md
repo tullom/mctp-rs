@@ -1,187 +1,173 @@
 # mctp-rs
 
-A `no_std` MCTP (Management Component Transport Protocol) implementation in Rust.
+A `no_std` Rust implementation of the Management Component Transport Protocol (MCTP) as defined in the [DMTF DSP0236 specification](https://www.dmtf.org/sites/default/files/standards/documents/DSP0236_1.3.3.pdf).
 
-## ⚠️ Current Implementation: Static EID Allocation Only
+## Overview
 
-This implementation currently supports **static EID allocation only**. This means:
+MCTP is a communication protocol designed for platform management subsystems in computer systems. It facilitates communication between management controllers (like BMCs) and managed devices across various bus types. This library provides:
 
-- Endpoint IDs (EIDs) are pre-configured and known at initialization time
-- No dynamic discovery or EID assignment is performed
-- Suitable for embedded systems, test environments, and controlled deployments
-- Provides a solid foundation for basic MCTP communication
+- **Protocol Implementation**: Complete MCTP transport layer with packet assembly/disassembly
+- **Medium Abstraction**: Support for different physical transport layers (SMBus/eSPI included)
+- **No-std Compatible**: Suitable for embedded and resource-constrained environments
 
 ## Features
 
-- ✅ `no_std` compatible with `heapless` collections
-- ✅ Async-first API design
-- ✅ Transport-agnostic (I2C, PCIe, eSPI, etc.)
-- ✅ Manual packet serialization for portability
-- ✅ Type-safe endpoint IDs and message tags
-- ✅ Message fragmentation and reassembly
-- ✅ Basic MCTP Control protocol support
-- ✅ Client and Host endpoint APIs
-- ⚠️ Static EID allocation only (no dynamic discovery)
+- `espi` - Enables eSPI device support via the `espi-device` crate
 
-## Cargo Features
+## Usage
 
-- `client` (default): Enable `ClientEndpoint` for managed devices
-- `host` (default): Enable `Endpoint` as `HostEndpoint` for management controllers
-- `bridge` (default): Enable `Bridge` for multi-transport routing
-
-## Quick Start
-
-### Client Endpoint (Managed Device)
+### Basic Message Handling
 
 ```rust
-use mctp_rs::{ClientEndpoint, MessageHandler, MessageView, EndpointId};
+use mctp_rs::*;
 
-struct MyHandler;
+// Create a packet context with a medium and assembly buffer
+let mut assembly_buffer = [0u8; 1024];
+let medium = /* your medium implementation */;
+let mut context = MctpPacketContext::new(medium, &mut assembly_buffer);
 
-impl MessageHandler for MyHandler {
-    async fn handle_application_message(
-        &mut self,
-        message_type: u8,
-        request: MessageView,
-        response_buf: &mut [u8],
-    ) -> Option<usize> {
-        match message_type {
-            0x01 => {
-                // Handle application-specific message
-                response_buf[0] = 0x01; // Response message type
-                response_buf[1] = 0x00; // Success
-                Some(2) // Response length
+// Receive and parse incoming packets
+match context.receive_packet(raw_packet_data) {
+    Ok(Some(message)) => {
+        // Complete message received
+        match message.header_and_body {
+            MctpMessageHeaderAndBody::Control { header, body } => {
+                // Handle MCTP control message
+                println!("Received control command: {:?}", header.command_code);
             }
-            _ => None, // No response
+            MctpMessageHeaderAndBody::VendorDefinedPci { header, body } => {
+                // Handle vendor-defined PCI message
+            }
+            MctpMessageHeaderAndBody::VendorDefinedIana { header, body } => {
+                // Handle vendor-defined IANA message
+            }
         }
     }
-
-    async fn on_eid_assigned(&mut self, new_eid: EndpointId) {
-        // Handle EID assignment notification
+    Ok(None) => {
+        // Partial message, waiting for more packets
     }
-}
-
-// Usage
-let transport = MyTransport::new(); // Your transport implementation
-let endpoint = Endpoint::new(transport, EndpointId::new(42));
-let handler = MyHandler;
-let mut client = ClientEndpoint::new(endpoint, handler);
-
-// Run the client event loop
-let mut rx_buffer = [0u8; 1024];
-let mut tx_buffer = [0u8; 1024];
-client.listen(&mut rx_buffer, &mut tx_buffer).await; // Never returns
-```
-
-### Host Endpoint (Management Controller)
-
-```rust
-use mctp_rs::{endpoint::Endpoint, EndpointId};
-
-// Usage
-let transport = MyTransport::new(); // Your transport implementation
-let mut host = Endpoint::new(transport, EndpointId::new(1));
-
-// Send a message to a managed device
-let message = [0x01, 0x02, 0x03]; // Your message
-match host.send_message(EndpointId::new(42), &message).await {
-    Ok(()) => println!("Message sent successfully"),
-    Err(e) => println!("Send failed: {:?}", e),
-}
-
-// Receive a message
-let mut response_buf = [0u8; 1024];
-match host.receive_message(&mut response_buf).await {
-    Ok(response) => {
-        println!("Received message from EID {}: {:?}",
-                 response.source_eid.0, response.payload);
+    Err(e) => {
+        // Handle protocol or medium error
+        eprintln!("Error receiving packet: {:?}", e);
     }
-    Err(e) => println!("Receive failed: {:?}", e),
 }
 ```
 
-### Transport Implementation
-
-Implement the `Transport` trait for your physical medium:
+### Sending Messages
 
 ```rust
-use mctp_rs::Transport;
+// Create a reply context (usually from a received message)
+let reply_context = MctpReplyContext {
+    destination_endpoint_id: EndpointId::Id(0x20),
+    source_endpoint_id: EndpointId::Id(0x21),
+    packet_sequence_number: MctpSequenceNumber::new(0),
+    message_tag: MctpMessageTag::try_from(1).unwrap(),
+    medium_context: (), // Medium-specific context
+};
 
-struct MyI2cTransport {
-    // Your I2C implementation
+// Serialize a message into packets
+let message_data = b"Hello MCTP!";
+let mut packet_state = context.serialize_packet(reply_context, message_data)?;
+
+// Send each packet
+while let Some(packet_result) = packet_state.next() {
+    let packet = packet_result?;
+    // Send packet via your transport medium
+    send_packet_via_transport(packet);
+}
+```
+
+### Control Commands
+
+```rust
+use mctp_rs::control_command::*;
+
+// Create a GetEndpointId request
+let request = GetEndpointIdRequest;
+let mut buffer = [0u8; 64];
+let serialized = request.serialize(&mut buffer)?;
+
+// Parse a GetEndpointId response
+let response = GetEndpointIdResponse::deserialize(response_data)?;
+println!("Endpoint ID: {:?}", response.endpoint_id);
+println!("Endpoint Type: {:?}", response.endpoint_type);
+```
+
+### Implementing Custom Mediums
+
+```rust
+use mctp_rs::medium::*;
+
+#[derive(Debug, Clone, Copy)]
+struct MyMedium {
+    mtu: usize,
 }
 
-impl Transport for MyI2cTransport {
-    type Error = MyI2cError;
-    type PhysicalAddress = u8; // I2C address
-    const MTU: usize = 64; // I2C MTU
+#[derive(Debug, Clone, Copy)]
+struct MyMediumFrame {
+    packet_size: usize,
+}
 
-    async fn send_packet(&mut self, packet: &[u8]) -> Result<(), Self::Error> {
-        // Send packet over I2C
+impl MctpMedium for MyMedium {
+    type Frame = MyMediumFrame;
+    type Error = &'static str;
+    type ReplyContext = ();
+
+    fn max_message_body_size(&self) -> usize {
+        self.mtu
     }
 
-    async fn receive_packet(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
-        // Receive packet from I2C, return packet length
+    fn deserialize<'buf>(
+        &self,
+        packet: &'buf [u8],
+    ) -> Result<(Self::Frame, &'buf [u8]), Self::Error> {
+        // Parse medium-specific headers and return MCTP payload
+        Ok((MyMediumFrame { packet_size: packet.len() }, packet))
+    }
+
+    fn serialize<'buf, E, F>(
+        &self,
+        _reply_context: Self::ReplyContext,
+        buffer: &'buf mut [u8],
+        message_writer: F,
+    ) -> Result<&'buf [u8], MediumOrGenericError<Self::Error, E>>
+    where
+        F: for<'a> FnOnce(&'a mut [u8]) -> Result<usize, E>,
+    {
+        // Write medium-specific headers, call message_writer for MCTP data
+        let message_len = message_writer(buffer).map_err(MediumOrGenericError::Generic)?;
+        Ok(&buffer[..message_len])
+    }
+}
+
+impl MctpMediumFrame<MyMedium> for MyMediumFrame {
+    fn packet_size(&self) -> usize {
+        self.packet_size
+    }
+
+    fn reply_context(&self) -> <MyMedium as MctpMedium>::ReplyContext {
+        ()
     }
 }
 ```
 
 ## Architecture
 
-The library is organized into several layers:
+The library is structured around:
 
-1. **Core Data Structures** (`messages.rs`): `PacketHeader`, `EndpointId`, etc.
-2. **Transport Abstraction** (`transport.rs`): Async trait for different physical media
-3. **Endpoint Logic** (`endpoint.rs`): Message assembly/disassembly and reassembly
-4. **Client API** (`client.rs`): High-level API for managed devices
-5. **Host API** (`host.rs`): High-level API for management controllers
-6. **Bridge API** (`bridge.rs`): Multi-transport routing (future)
+- **`MctpPacketContext`**: Main entry point for handling MCTP packets
+- **`MctpMedium`**: Trait for implementing transport-specific packet handling
+- **`MctpMessage`**: Represents a complete MCTP message with reply context
+- **Control Commands**: Type-safe implementation of MCTP control protocol
 
-## Static EID Configuration
-
-Since this implementation uses static EID allocation, you need to:
-
-1. **Pre-assign EIDs**: Each device must have a unique EID (1-254)
-2. **Configure the Host**: The management controller must know all device EIDs
-3. **No Discovery**: Devices don't announce themselves or get assigned EIDs dynamically
-
-### Example Network Configuration
-
-```rust
-// Management Controller (Bus Owner)
-const HOST_EID: u8 = 1;
-
-// Managed Devices (pre-configured)
-const DEVICE_A_EID: u8 = 10;
-const DEVICE_B_EID: u8 = 11;
-const SENSOR_EID: u8 = 20;
-```
-
-## Limitations
-
-- **No Hot-Plug Support**: Devices must be known at initialization
-- **No Dynamic Discovery**: No automatic device detection
-- **Manual EID Management**: EID assignments must be managed manually
-- **No Bridge Routing**: Multi-transport bridging not yet implemented
-
-## Future Roadmap
-
-- [ ] Dynamic EID allocation and discovery
-- [ ] Hot-plug device support
-- [ ] Advanced routing and bridging
-- [ ] Transport-specific crates (`mctp-i2c`, `mctp-pcie`)
-- [ ] PLDM message type support
-- [ ] Message integrity checking
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
-Licensed under either of:
+MIT License - see [LICENSE.md](LICENSE.md) for details.
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT License ([LICENSE-MIT](LICENSE-MIT))
+## Contributing
 
-at your option.
+1. Ensure `cargo check` and `cargo test` pass
+2. Test with all feature combinations using `cargo hack --feature-powerset check`
+3. Maintain `no_std` compatibility
+4. Follow the existing code patterns for protocol message handling
