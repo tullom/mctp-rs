@@ -20,7 +20,7 @@ use crate::mctp_message_tag::MctpMessageTag;
 use crate::mctp_message_type::MctpMessageType;
 use crate::mctp_sequence_number::MctpSequenceNumber;
 use crate::mctp_transport_header::MctpTransportHeader;
-use crate::medium::{MctpMedium, MctpMediumFrame, MediumOrGenericError};
+use crate::medium::{MctpMedium, MctpMediumFrame};
 
 #[cfg(test)]
 mod tests_1 {
@@ -250,14 +250,12 @@ impl<'source, 'assembly, M: MctpMedium> SerializePacketState<'source, 'assembly,
                     Ok(4 + body_size)
                 },
             )
-            // TODO - .into() for these error types
-            .map_err(|err| match err {
-                MediumOrGenericError::Medium(e) => MctpPacketError::MediumError(e),
-                MediumOrGenericError::Generic(e) => e,
-            });
+            .map_err(Into::<MctpPacketError<M::Error>>::into);
 
         // Increment packet number for next call
-        self.current_packet_num += 1;
+        if packet.is_ok() {
+            self.current_packet_num += 1;
+        }
 
         Some(packet)
     }
@@ -473,7 +471,7 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
 #[cfg(test)]
 mod mctp_context_tests {
     use super::*;
-    use crate::medium::MctpMediumFrame;
+    use crate::medium::{MctpMediumFrame, MediumOrGenericError};
     use pretty_assertions::assert_eq;
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]

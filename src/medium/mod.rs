@@ -1,3 +1,5 @@
+use crate::MctpPacketError;
+
 mod smbus_espi;
 mod util;
 
@@ -35,6 +37,18 @@ pub trait MctpMedium: Sized {
 pub enum MediumOrGenericError<M, G> {
     Medium(M),
     Generic(G),
+}
+
+impl<E> From<MediumOrGenericError<E, MctpPacketError<E>>> for MctpPacketError<E>
+where
+    E: core::fmt::Debug + Copy + Clone + PartialEq + Eq,
+{
+    fn from(value: MediumOrGenericError<E, MctpPacketError<E>>) -> Self {
+        match value {
+            MediumOrGenericError::Medium(e) => MctpPacketError::MediumError(e),
+            MediumOrGenericError::Generic(e) => e,
+        }
+    }
 }
 
 pub trait MctpMediumFrame<M: MctpMedium>: Clone + Copy {
