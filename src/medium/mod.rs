@@ -34,6 +34,7 @@ pub trait MctpMedium: Sized {
         F: for<'a> FnMut(&'a mut [u8]) -> Result<usize, E>;
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum MediumOrGenericError<M, G> {
     Medium(M),
     Generic(G),

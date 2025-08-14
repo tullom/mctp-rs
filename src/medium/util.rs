@@ -1,6 +1,6 @@
 use bit_register::{NumBytes, TryFromBits, TryIntoBits};
 
-#[derive(Copy, Clone, PartialEq, Eq, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
 pub struct Zero;
 
 impl TryFromBits<u32> for Zero {
