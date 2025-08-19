@@ -11,7 +11,7 @@ espi = ["dep:espi-device"]
 heapless = "0.8.0"
 espi-device = { git = "https://github.com/OpenDevicePartnership/haf-ec-service", optional = true }
 bit-register = { git = "https://github.com/OpenDevicePartnership/odp-utilities", package = "bit-register" }
-num_enum = "0.7.4"
+num_enum = { version = "0.7.4", default-features = false }
 smbus-pec = "1.0.1"
 
 [dev-dependencies]
