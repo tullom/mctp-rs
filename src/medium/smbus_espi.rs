@@ -1,12 +1,13 @@
 use crate::medium::{MctpMedium, MctpMediumFrame, MediumOrGenericError, util::Zero};
 use bit_register::{NumBytes, TryFromBits, TryIntoBits, bit_register};
 
-struct SmbusEspiMedium;
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct SmbusEspiMedium;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-struct SmbusEspiReplyContext {
-    destination_slave_address: u8,
-    source_slave_address: u8,
+pub struct SmbusEspiReplyContext {
+    pub destination_slave_address: u8,
+    pub source_slave_address: u8,
 }
 
 impl MctpMedium for SmbusEspiMedium {
@@ -32,12 +33,13 @@ impl MctpMedium for SmbusEspiMedium {
         let packet = &packet[4..];
         let header =
             SmbusEspiMediumHeader::try_from(header_value).map_err(|_| "Invalid smbus header")?;
-        if header.byte_count as usize + 1 > packet.len() {
+        // Weirdly, byte count includes the source slave address
+        if header.byte_count as usize + 1 > packet.len() + 1 {
             return Err("Packet too short to parse smbus body and PEC");
         }
-        let pec = packet[header.byte_count as usize];
+        let pec = packet[header.byte_count as usize - 1];
         // strip off the PEC byte
-        let packet = &packet[..header.byte_count as usize];
+        let packet = &packet[..header.byte_count as usize - 1];
         Ok((SmbusEspiMediumFrame { header, pec }, packet))
     }
 
@@ -67,7 +69,7 @@ impl MctpMedium for SmbusEspiMedium {
         let header = SmbusEspiMediumHeader {
             destination_slave_address: reply_context.source_slave_address,
             source_slave_address: reply_context.destination_slave_address,
-            byte_count: body_len as u8,
+            byte_count: body_len as u8 + 1, // + 1 for the source slave address
             command_code: SmbusCommandCode::MCTP,
             ..Default::default()
         };
@@ -83,9 +85,8 @@ impl MctpMedium for SmbusEspiMedium {
         Ok(&buffer[0..4 + body_len + 1])
     }
 
-    // TODO - this is a guess, need to find the actual value from spec
     fn max_message_body_size(&self) -> usize {
-        32
+        64
     }
 }
 
@@ -119,16 +120,17 @@ bit_register! {
     #[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
     struct SmbusEspiMediumHeader: little_endian u32 {
         pub destination_slave_address: u8 => [25:31],
-        pub _reserved1: Zero => [24],
+        pub _reserved1: u8 => [24],
         pub command_code: SmbusCommandCode => [16:24],
         pub byte_count: u8 => [8:15],
         pub source_slave_address: u8 => [1:7],
-        pub _reserved2: Zero => [0],
+        // Actually needs to be 1
+        pub _reserved2: u8 => [0],
     }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-struct SmbusEspiMediumFrame {
+pub struct SmbusEspiMediumFrame {
     header: SmbusEspiMediumHeader,
     pec: u8,
 }

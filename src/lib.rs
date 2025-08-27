@@ -1,15 +1,15 @@
 #![no_std]
 #![allow(dead_code)]
 
-mod control_command;
-mod endpoint_id;
-mod mctp_command_code;
-mod mctp_completion_code;
-mod mctp_message_tag;
-mod mctp_message_type;
-mod mctp_sequence_number;
-mod mctp_transport_header;
-mod medium;
+pub mod control_command;
+pub mod endpoint_id;
+pub mod mctp_command_code;
+pub mod mctp_completion_code;
+pub mod mctp_message_tag;
+pub mod mctp_message_type;
+pub mod mctp_sequence_number;
+pub mod mctp_transport_header;
+pub mod medium;
 
 use bit_register::bit_register;
 use endpoint_id::EndpointId;
@@ -157,7 +157,7 @@ mod tests_2 {
 pub enum MctpMessageData {}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum ProtocolError {
+pub enum ProtocolError {
     ExpectedStartOfMessage,
     UnexpectedStartOfMessage,
     MessageTagMismatch(MctpMessageTag, MctpMessageTag),
@@ -170,7 +170,7 @@ enum ProtocolError {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum MctpPacketError<MediumError: core::fmt::Debug + Copy + Clone + PartialEq + Eq> {
+pub enum MctpPacketError<MediumError: core::fmt::Debug + Copy + Clone + PartialEq + Eq> {
     HeaderParseError(&'static str),
     CommandParseError(&'static str),
     SerializeError(&'static str),
@@ -194,7 +194,7 @@ struct AssemblingState {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct SerializePacketState<'source, 'assembly, M: MctpMedium> {
+pub struct SerializePacketState<'source, 'assembly, M: MctpMedium> {
     medium: &'assembly M,
     reply_context: MctpReplyContext<M>,
     current_packet_num: u8,
@@ -203,7 +203,7 @@ struct SerializePacketState<'source, 'assembly, M: MctpMedium> {
 }
 
 impl<'source, 'assembly, M: MctpMedium> SerializePacketState<'source, 'assembly, M> {
-    fn next(&mut self) -> Option<Result<&[u8], MctpPacketError<M::Error>>> {
+    pub fn next(&mut self) -> Option<Result<&[u8], MctpPacketError<M::Error>>> {
         if self.source_buffer.is_empty() {
             return None;
         }
@@ -245,9 +245,33 @@ impl<'source, 'assembly, M: MctpMedium> SerializePacketState<'source, 'assembly,
 
                     // transport header is the first 4 bytes of the buffer
                     buffer[0..4].copy_from_slice(&transport_header_value.to_be_bytes());
-                    // message body is the rest of the buffer, up to the packet size
-                    buffer[4..4 + body_size].copy_from_slice(body);
-                    Ok(4 + body_size)
+
+                    if start_of_message == 1 {
+                        // TODO: Make this generic across any message type, not just MCTP control
+                        let control_header = MctpControlMessageHeaderBitRegister {
+                            integrity_check: 0,
+                            message_type: MctpMessageType::MctpControl,
+                            request_bit: 0,
+                            datagram_bit: 1,
+                            instance_id: 1,
+                            command_code: MctpCommandCode::try_from(0).unwrap(),
+                            completion_code: MctpCompletionCode::Success,
+                            ..Default::default()
+                        };
+    
+                        let control_header_value: u32 = control_header.try_into().map_err(MctpPacketError::SerializeError)?;
+                        // MCTP Control
+                        buffer[4..8].copy_from_slice(&control_header_value.to_be_bytes());
+                        // message body is the rest of the buffer, up to the packet size
+                        buffer[8..8 + body_size].copy_from_slice(body);
+                        Ok(8 + body_size)
+                    } else {
+                        // message body is the rest of the buffer, up to the packet size
+                        buffer[4..4 + body_size].copy_from_slice(body);
+                        Ok(4 + body_size)
+                    }
+
+
                 },
             )
             .map_err(Into::<MctpPacketError<M::Error>>::into);
@@ -261,7 +285,7 @@ impl<'source, 'assembly, M: MctpMedium> SerializePacketState<'source, 'assembly,
     }
 }
 
-struct MctpPacketContext<'buf, M: MctpMedium> {
+pub struct MctpPacketContext<'buf, M: MctpMedium> {
     assembly_state: AssemblyState,
     medium: M,
     packet_assembly_buffer: &'buf mut [u8],
@@ -352,7 +376,7 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
                 "transport frame indicated packet length < 4",
             ));
         }
-        let packet_size = packet_size - 4; // to account for the transport header
+        let packet_size = packet_size - 5; // to account for the transport header and one byte of slave addr
         if packet.len() < packet_size {
             return Err(MctpPacketError::HeaderParseError(
                 "packet.len() < packet_size",
@@ -445,7 +469,7 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
         Ok((header_and_body, None))
     }
 
-    fn serialize_packet<'source>(
+    pub fn serialize_packet<'source>(
         &'buf mut self,
         reply_context: MctpReplyContext<M>,
         message: &'source [u8],
@@ -471,7 +495,10 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
 #[cfg(test)]
 mod mctp_context_tests {
     use super::*;
-    use crate::medium::{MctpMediumFrame, MediumOrGenericError};
+    use crate::medium::{
+        MctpMediumFrame, MediumOrGenericError,
+        smbus_espi::{SmbusEspiMedium, SmbusEspiReplyContext},
+    };
     use pretty_assertions::assert_eq;
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -636,6 +663,62 @@ mod mctp_context_tests {
         );
     }
 
+    const PKT: Packet = Packet(&[
+        // transport header:
+        2,
+        0x0F,
+        9,
+        1,
+        // message header:
+        1,
+        8,
+        0x80,
+        0b1101_0011,
+        // MCTP control header
+        0,
+        0xC1,
+        2,
+        0,
+        // Data
+        // PEC
+        1,
+    ]);
+
+    #[test]
+    fn one_pkt() {
+        let mut buffer = [0; 1024];
+        let mut context = MctpPacketContext::<SmbusEspiMedium>::new(SmbusEspiMedium, &mut buffer);
+
+        assert_eq!(
+            context.receive_packet(PKT.0).unwrap().unwrap(),
+            MctpMessage {
+                reply_context: MctpReplyContext {
+                    destination_endpoint_id: EndpointId::Id(8),
+                    source_endpoint_id: EndpointId::Id(128),
+                    packet_sequence_number: MctpSequenceNumber::new(1),
+                    message_tag: MctpMessageTag::try_from(3).unwrap(),
+                    medium_context: SmbusEspiReplyContext {
+                        destination_slave_address: 1,
+                        source_slave_address: 0,
+                    },
+                },
+                header_and_body: MctpMessageHeaderAndBody::Control {
+                    header: MctpControlMessageHeaderBitRegister {
+                        integrity_check: 0,
+                        message_type: MctpMessageType::MctpControl,
+                        command_code: MctpCommandCode::GetEndpointId,
+                        datagram_bit: 1,
+                        request_bit: 1,
+                        instance_id: 1,
+                        ..Default::default()
+                    },
+                    body: &[],
+                },
+                message_integrity_check: None,
+            }
+        );
+    }
+
     #[test]
     fn lacking_start_of_message() {
         let mut buffer = [0; 1024];
@@ -742,6 +825,67 @@ mod mctp_context_tests {
                 0xC,
                 0xD,
             ]
+        );
+    }
+
+    #[test]
+    fn test_send_smbus_packet() {
+        let mut buffer = [0; 1024];
+        let mut context = MctpPacketContext::<SmbusEspiMedium>::new(SmbusEspiMedium, &mut buffer);
+
+        let reply_context = MctpReplyContext {
+            destination_endpoint_id: endpoint_id::EndpointId::Id(8),
+            source_endpoint_id: endpoint_id::EndpointId::Id(0x80),
+            packet_sequence_number: mctp_sequence_number::MctpSequenceNumber::new(0),
+            message_tag: mctp_message_tag::MctpMessageTag::try_from(3).unwrap(),
+            medium_context: SmbusEspiReplyContext {
+                destination_slave_address: 1,
+                source_slave_address: 0,
+            }, // Medium-specific context
+        };
+
+        let mut state = context.serialize_packet(reply_context, &[0,0,0,1,0,0,1,0,0,1,0,0,1,0,0,0]).unwrap();
+
+        let packet = state.next().unwrap().unwrap();
+        assert_eq!(
+            packet,
+            &[
+                // mctp transport header
+                0, // mctp reserved, header version
+                15,         // destination endpoint id
+                25,         // source endpoint id
+                2, // som (1), eom (1), seq (2), tag owner (0), message tag (3)
+                // mctp body data - 1 byte
+                1,
+                0x80,
+                8,
+                211,
+                // test trailer - 2 bytes
+                0,
+                65,
+                0,
+                0,
+
+                0,
+                0,
+                0,
+                1,
+                
+                0,
+                0,
+                1,
+                0,
+                
+                0,
+                1,
+                0,
+                0,
+                
+                1,
+                0,
+                0,
+                0,
+                ]
         );
     }
 

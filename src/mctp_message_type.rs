@@ -17,6 +17,7 @@ pub enum MctpMessageType {
     CxlFmApiOverMctp = 0x07,
     CxlCciOverMctp = 0x08,
     PcieMiOverMctp = 0x09,
+    // Inject message type here
     VendorDefinedPci = 0x7E,
     VendorDefinedIana = 0x7F,
 }

@@ -23,7 +23,8 @@ impl TryFromBits<u32> for EndpointId {
         match bits {
             0x00 => Ok(EndpointId::Null),
             0xFF => Ok(EndpointId::Broadcast),
-            0x08..=0xFE => Ok(EndpointId::Id(bits as u8)),
+            // why 0x08 to 0xFE???
+            0x01..=0xFE => Ok(EndpointId::Id(bits as u8)),
             _ => Err("Invalid endpoint ID"),
         }
     }
@@ -35,6 +36,16 @@ impl TryIntoBits<u32> for EndpointId {
             EndpointId::Null => Ok(0x00),
             EndpointId::Broadcast => Ok(0xFF),
             EndpointId::Id(id) => Ok(id as u32),
+        }
+    }
+}
+
+impl From<EndpointId> for u8 {
+    fn from(value: EndpointId) -> Self {
+        match value {
+            EndpointId::Null => 0,
+            EndpointId::Broadcast => 0xFF,
+            EndpointId::Id(id) => id,
         }
     }
 }
