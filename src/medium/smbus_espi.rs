@@ -60,8 +60,13 @@ impl MctpMedium for SmbusEspiMedium {
         // split off a buffer where we will write the header, the rest is for body + PEC
         let (header_slice, body) = buffer.split_at_mut(4);
 
-        // Write the body first
-        let body_len = message_writer(body).map_err(MediumOrGenericError::Generic)?;
+        // Write the body first, but ensure we leave space for PEC
+        if body.len() == 0 {
+            return Err(MediumOrGenericError::Medium("No space for PEC byte"));
+        }
+        let available_body_len = body.len() - 1; // Reserve 1 byte for PEC
+        let body_len = message_writer(&mut body[..available_body_len])
+            .map_err(MediumOrGenericError::Generic)?;
 
         // with the body has been written, construct the header
         let header = SmbusEspiMediumHeader {
@@ -661,5 +666,143 @@ mod tests {
             assert_eq!(body.len(), byte_count as usize);
             assert_eq!(frame.pec, pec as u8);
         }
+    }
+
+    #[test]
+    fn test_smbus_buffer_overflow_protection() {
+        let medium = SmbusEspiMedium;
+
+        // Test packet with byte_count that would cause overflow
+        let header_bytes = [
+            0x20, // destination_slave_address
+            0x0F, // command_code (MCTP)
+            0xFF, // byte_count: 255 bytes (maximum)
+            0x20, // source_slave_address
+        ];
+
+        // Provide a packet that's too short for the claimed byte_count
+        let short_payload = [0xAA, 0xBB]; // Only 2 bytes, but header claims 255
+        let mut packet = [0u8; 7]; // 4 header + 2 payload + 1 PEC = 7 total
+        packet[0..4].copy_from_slice(&header_bytes);
+        packet[4..6].copy_from_slice(&short_payload);
+        packet[6] = 0x00; // PEC (doesn't matter for this test)
+
+        let result = medium.deserialize(&packet);
+        assert_eq!(result, Err("Packet too short to parse smbus body and PEC"));
+    }
+
+    #[test]
+    fn test_smbus_serialize_buffer_underflow() {
+        let medium = SmbusEspiMedium;
+        let reply_context = SmbusEspiReplyContext {
+            destination_slave_address: 0x20,
+            source_slave_address: 0x10,
+        };
+
+        // Test with buffer smaller than minimum required (4 header + 1 PEC = 5 bytes)
+        let mut tiny_buffer = [0u8; 4]; // Only 4 bytes, need at least 5
+
+        let result = medium.serialize(reply_context, &mut tiny_buffer, |_| {
+            Ok::<usize, &'static str>(0) // No payload
+        });
+
+        assert_eq!(
+            result,
+            Err(MediumOrGenericError::Medium(
+                "Buffer too small for smbus frame"
+            ))
+        );
+    }
+
+    #[test]
+    fn test_smbus_header_bounds_checking() {
+        let medium = SmbusEspiMedium;
+
+        // Test with packet shorter than header size (4 bytes)
+        for packet_size in 0..4 {
+            let short_packet = [0u8; 4];
+            let result = medium.deserialize(&short_packet[..packet_size]);
+            assert_eq!(result, Err("Packet too short to parse smbus header"));
+        }
+    }
+
+    #[test]
+    fn test_smbus_pec_bounds_checking() {
+        let medium = SmbusEspiMedium;
+
+        // Test with packet that has header but claims more data than available for PEC
+        let header_bytes = [
+            0x20, // destination_slave_address
+            0x0F, // command_code (MCTP)
+            0x05, // byte_count: 5 bytes
+            0x20, // source_slave_address
+        ];
+
+        // Provide exactly enough bytes for the data but no PEC byte
+        let payload = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE]; // 5 bytes as claimed
+        let mut packet = [0u8; 9]; // 4 header + 5 payload = 9 total (missing PEC)
+        packet[0..4].copy_from_slice(&header_bytes);
+        packet[4..9].copy_from_slice(&payload);
+
+        let result = medium.deserialize(&packet);
+        assert_eq!(result, Err("Packet too short to parse smbus body and PEC"));
+    }
+
+    #[test]
+    fn test_smbus_zero_byte_count_edge_case() {
+        let medium = SmbusEspiMedium;
+
+        // Test with zero byte count but packet shorter than header + PEC
+        let header_bytes = [
+            0x20, // destination_slave_address
+            0x0F, // command_code (MCTP)
+            0x00, // byte_count: 0 bytes
+            0x20, // source_slave_address
+        ];
+
+        // Test with packet missing PEC byte
+        let mut short_packet = [0u8; 4]; // Only header, no PEC
+        short_packet.copy_from_slice(&header_bytes);
+
+        let result = medium.deserialize(&short_packet);
+        assert_eq!(result, Err("Packet too short to parse smbus body and PEC"));
+    }
+
+    #[test]
+    fn test_smbus_maximum_payload_boundary() {
+        let medium = SmbusEspiMedium;
+
+        // Test serialization at the boundary of maximum payload (255 bytes)
+        let reply_context = SmbusEspiReplyContext {
+            destination_slave_address: 0x20,
+            source_slave_address: 0x10,
+        };
+
+        let max_payload = [0x55u8; 255];
+        let mut buffer = [0u8; 260]; // 4 + 255 + 1 = exactly enough
+
+        let result = medium.serialize(reply_context, &mut buffer, |buf| {
+            let copy_len = max_payload.len().min(buf.len());
+            buf[..copy_len].copy_from_slice(&max_payload[..copy_len]);
+            Ok::<usize, &'static str>(copy_len)
+        });
+
+        assert!(result.is_ok());
+        let serialized = result.unwrap();
+        assert_eq!(serialized.len(), 260); // Should use exactly all available space
+
+        // Test with buffer one byte too small for maximum payload
+        let mut small_buffer = [0u8; 259]; // One byte short for max payload
+        let result_small = medium.serialize(reply_context, &mut small_buffer, |buf| {
+            // Try to write max payload but buffer is too small
+            let copy_len = max_payload.len().min(buf.len());
+            buf[..copy_len].copy_from_slice(&max_payload[..copy_len]);
+            Ok::<usize, &'static str>(copy_len)
+        });
+
+        // Should still work but with truncated payload (254 bytes payload + 4 header + 1 PEC = 259)
+        assert!(result_small.is_ok());
+        let serialized_small = result_small.unwrap();
+        assert_eq!(serialized_small.len(), 259); // Uses all available space
     }
 }

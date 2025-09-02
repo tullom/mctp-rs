@@ -31,7 +31,7 @@ pub trait MctpMedium: Sized {
         message_writer: F,
     ) -> Result<&'buf [u8], MediumOrGenericError<Self::Error, E>>
     where
-        F: for<'a> FnMut(&'a mut [u8]) -> Result<usize, E>;
+        F: for<'a> FnOnce(&'a mut [u8]) -> Result<usize, E>;
 }
 
 #[derive(Debug, PartialEq, Eq)]

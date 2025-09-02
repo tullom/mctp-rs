@@ -358,6 +358,12 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
                 "packet.len() < packet_size",
             ));
         }
+        // Check bounds to prevent buffer overflow
+        if buffer_idx + packet_size > self.packet_assembly_buffer.len() {
+            return Err(MctpPacketError::HeaderParseError(
+                "packet assembly buffer overflow - insufficient space",
+            ));
+        }
         self.packet_assembly_buffer[buffer_idx..buffer_idx + packet_size]
             .copy_from_slice(&packet[..packet_size]);
         state.packet_assembly_buffer_index += packet_size;
@@ -390,6 +396,11 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
         &mut self,
         packet: &'packet [u8],
     ) -> Result<(MctpTransportHeader, &'packet [u8]), MctpPacketError<M::Error>> {
+        if packet.len() < 4 {
+            return Err(MctpPacketError::HeaderParseError(
+                "Packet is too small, cannot parse transport header",
+            ));
+        }
         let transport_header_value = u32::from_be_bytes(packet[0..4].try_into().map_err(|_| {
             MctpPacketError::HeaderParseError("Packet is too small, cannot parse transport header")
         })?);
@@ -405,6 +416,11 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
     ) -> Result<(MctpMessageHeaderAndBody<'s>, Option<u8>), MctpPacketError<M::Error>> {
         // first four bytes are the message header, parse with MctpMessageHeaderBitRegister
         // to figure out the type, then based on that, parse the type specific header
+        if packet.len() < 4 {
+            return Err(MctpPacketError::HeaderParseError(
+                "packet < 4 bytes for message header",
+            ));
+        }
         let header_u32 = u32::from_be_bytes(packet[0..4].try_into().map_err(|_| {
             MctpPacketError::HeaderParseError("packet < 4 bytes for message header")
         })?);
@@ -504,7 +520,7 @@ mod mctp_context_tests {
 
     impl MctpMedium for TestMedium {
         type Frame = TestMediumFrame;
-        type Error = ();
+        type Error = &'static str;
         type ReplyContext = ();
 
         fn deserialize<'buf>(
@@ -514,11 +530,14 @@ mod mctp_context_tests {
             let packet_len = packet.len();
 
             // check that header / trailer is present and correct
+            if packet.len() < self.header.len() + self.trailer.len() {
+                return Err("packet too short");
+            }
             if packet[0..self.header.len()] != *self.header {
-                panic!("header mismatch");
+                return Err("header mismatch");
             }
             if packet[packet_len - self.trailer.len()..packet_len] != *self.trailer {
-                panic!("trailer mismatch");
+                return Err("trailer mismatch");
             }
 
             let packet = &packet[self.header.len()..packet_len - self.trailer.len()];
@@ -541,13 +560,13 @@ mod mctp_context_tests {
 
             // Ensure buffer can fit at least headers and trailers
             if buffer.len() < header_len + trailer_len {
-                return Err(MediumOrGenericError::Medium(()));
+                return Err(MediumOrGenericError::Medium("Buffer too small for headers"));
             }
 
             // Calculate available space for message (respecting MTU)
             let max_packet_size = self.mtu.min(buffer.len());
             if max_packet_size < header_len + trailer_len {
-                return Err(MediumOrGenericError::Medium(()));
+                return Err(MediumOrGenericError::Medium("MTU too small for headers"));
             }
             let max_message_size = max_packet_size - header_len - trailer_len;
 
@@ -843,5 +862,228 @@ mod mctp_context_tests {
 
         // Verify no more packets
         assert!(state.next().is_none(), "Expected exactly 3 packets");
+    }
+
+    #[test]
+    fn test_buffer_overflow_protection() {
+        // Test that buffer overflow is properly prevented
+        let mut small_buffer = [0u8; 16]; // Very small buffer
+        let mut context =
+            MctpPacketContext::<TestMedium>::new(TestMedium::new(), &mut small_buffer);
+
+        // Create a packet that would cause overflow without protection
+        let large_packet = [
+            // transport header:
+            0b0000_0001, // mctp reserved, header version
+            0b0000_1001, // destination endpoint id (9)
+            0b0001_0110, // source endpoint id (22)
+            0b1000_0011, // som, eom, seq (0), to, tag (3)
+            // message header:
+            0b0000_0000, // integrity check (off) / message type (mctp control message)
+            0b0000_0000, // rq, d, rsvd, instance id
+            0b0000_0010, // command code (2: get endpoint id)
+            0b0000_0000, // completion code
+            // Large message body that would overflow small buffer
+            0x01,
+            0x02,
+            0x03,
+            0x04,
+            0x05,
+            0x06,
+            0x07,
+            0x08,
+            0x09,
+            0x0A,
+            0x0B,
+            0x0C,
+            0x0D,
+            0x0E,
+            0x0F,
+            0x10,
+        ];
+
+        // This should return an error instead of panicking
+        let result = context.receive_packet(&large_packet);
+        assert!(result.is_err());
+
+        if let Err(MctpPacketError::HeaderParseError(msg)) = result {
+            assert!(msg.contains("buffer overflow"));
+        } else {
+            panic!("Expected HeaderParseError with buffer overflow message");
+        }
+    }
+
+    #[test]
+    fn test_multi_packet_buffer_overflow() {
+        // Test buffer overflow with multiple packets
+        let mut small_buffer = [0u8; 20]; // Small buffer that can fit first packet but not second
+        let mut context =
+            MctpPacketContext::<TestMedium>::new(TestMedium::new(), &mut small_buffer);
+
+        // First packet - fits in buffer
+        let first_packet = [
+            // transport header:
+            0b0000_0001, // mctp reserved, header version
+            0b0000_1001, // destination endpoint id (9)
+            0b0001_0110, // source endpoint id (22)
+            0b1000_0011, // som (1), eom (0), seq (0), to, tag (3)
+            // message header:
+            0b0000_0000, // integrity check (off) / message type (mctp control message)
+            0b0000_0000, // rq, d, rsvd, instance id
+            0b0000_0010, // command code (2: get endpoint id)
+            0b0000_0000, // completion code
+            // Small message body
+            0x01,
+            0x02,
+            0x03,
+            0x04,
+            0x05,
+            0x06,
+            0x07,
+            0x08,
+        ];
+
+        // First packet should succeed
+        let result1 = context.receive_packet(&first_packet);
+        assert!(result1.is_ok());
+        assert!(result1.unwrap().is_none()); // No complete message yet
+
+        // Second packet - would cause overflow
+        let second_packet = [
+            // transport header:
+            0b0000_0001, // mctp reserved, header version
+            0b0000_1001, // destination endpoint id (9)
+            0b0001_0110, // source endpoint id (22)
+            0b0101_0011, // som (0), eom (1), seq (1), to, tag (3) - correct sequence number
+            // Large continuation that would overflow
+            0x09,
+            0x0A,
+            0x0B,
+            0x0C,
+            0x0D,
+            0x0E,
+            0x0F,
+            0x10,
+            0x11,
+            0x12,
+            0x13,
+            0x14,
+            0x15,
+            0x16,
+            0x17,
+            0x18,
+        ];
+
+        // Second packet should fail with buffer overflow
+        let result2 = context.receive_packet(&second_packet);
+        assert!(result2.is_err());
+
+        if let Err(MctpPacketError::HeaderParseError(msg)) = result2 {
+            assert!(msg.contains("buffer overflow"));
+        } else {
+            panic!("Expected HeaderParseError with buffer overflow message");
+        }
+    }
+
+    #[test]
+    fn test_transport_header_underflow() {
+        // Test transport header parsing with insufficient bytes
+        let mut buffer = [0u8; 1024];
+        let mut context = MctpPacketContext::<TestMedium>::new(TestMedium::new(), &mut buffer);
+
+        // Packet too short for transport header (only 3 bytes)
+        let short_packet = [0x01, 0x02, 0x03];
+
+        let result = context.receive_packet(&short_packet);
+        assert!(result.is_err());
+
+        if let Err(MctpPacketError::HeaderParseError(msg)) = result {
+            assert!(msg.contains("cannot parse transport header"));
+        } else {
+            panic!("Expected HeaderParseError for short transport header");
+        }
+    }
+
+    #[test]
+    fn test_message_header_underflow() {
+        // Test message body parsing with insufficient bytes for message header
+        let mut buffer = [0u8; 1024];
+        let mut context = MctpPacketContext::<TestMedium>::new(TestMedium::new(), &mut buffer);
+
+        // Packet with transport header but no message header
+        let incomplete_packet = [
+            // transport header only (4 bytes)
+            0b0000_0001, // mctp reserved, header version
+            0b0000_1001, // destination endpoint id (9)
+            0b0001_0110, // source endpoint id (22)
+            0b1110_0011, // som (1), eom (1), seq (0), to, tag (3)
+                         // No message header (need 4 more bytes)
+        ];
+
+        let result = context.receive_packet(&incomplete_packet);
+        assert!(result.is_err());
+
+        if let Err(MctpPacketError::HeaderParseError(msg)) = result {
+            assert!(msg.contains("4 bytes for message header"));
+        } else {
+            panic!("Expected HeaderParseError for short message header");
+        }
+    }
+
+    #[test]
+    fn test_serialize_buffer_underflow() {
+        // Test serialization with buffer too small for transport header
+        let mut tiny_buffer = [0u8; 3]; // Too small for 4-byte transport header
+        let mut context = MctpPacketContext::<TestMedium>::new(TestMedium::new(), &mut tiny_buffer);
+
+        let reply_context = MctpReplyContext {
+            destination_endpoint_id: EndpointId::try_from(236).unwrap(),
+            source_endpoint_id: EndpointId::try_from(192).unwrap(),
+            packet_sequence_number: MctpSequenceNumber::new(1),
+            message_tag: MctpMessageTag::try_from(3).unwrap(),
+            medium_context: (),
+        };
+
+        let state_result = context.serialize_packet(reply_context, &[0xA5]);
+        assert!(state_result.is_ok());
+
+        let mut state = state_result.unwrap();
+        let packet_result = state.next().unwrap();
+
+        // Should fail because buffer is too small for transport header
+        assert!(packet_result.is_err());
+        if let Err(MctpPacketError::SerializeError(msg)) = packet_result {
+            assert!(msg.contains("assembly buffer too small"));
+        } else {
+            panic!("Expected SerializeError for small buffer");
+        }
+    }
+
+    #[test]
+    fn test_zero_size_assembly_buffer() {
+        // Test with zero-size assembly buffer
+        let mut empty_buffer = [0u8; 0];
+        let mut context =
+            MctpPacketContext::<TestMedium>::new(TestMedium::new(), &mut empty_buffer);
+
+        let packet = [
+            0b0000_0001, // mctp reserved, header version
+            0b0000_1001, // destination endpoint id (9)
+            0b0001_0110, // source endpoint id (22)
+            0b1110_0011, // som (1), eom (1), seq (0), to, tag (3)
+            0b0000_0000, // message header
+            0b0000_0000,
+            0b0000_0010,
+            0b0000_0000,
+        ];
+
+        let result = context.receive_packet(&packet);
+        assert!(result.is_err());
+
+        if let Err(MctpPacketError::HeaderParseError(msg)) = result {
+            assert!(msg.contains("buffer overflow"));
+        } else {
+            panic!("Expected buffer overflow error for zero-size buffer");
+        }
     }
 }

@@ -50,11 +50,17 @@ impl ControlCommand for GetEndpointIdRequest {
 impl ControlCommand for GetEndpointIdResponse {
     const COMMAND_CODE: MctpCommandCode = MctpCommandCode::GetEndpointId;
     fn serialize(self, buffer: &mut [u8]) -> Result<&[u8], &'static str> {
+        if buffer.len() < 3 {
+            return Err("Buffer too small for GetEndpointIdResponse");
+        }
         let value: u32 = self.try_into()?;
         buffer[0..3].copy_from_slice(&value.to_be_bytes()[1..4]);
         Ok(&buffer[0..3])
     }
     fn deserialize(buffer: &[u8]) -> Result<Self, &'static str> {
+        if buffer.len() < 3 {
+            return Err("Buffer too small for GetEndpointIdResponse");
+        }
         let mut tmp = [0; 4];
         tmp[1..4].copy_from_slice(buffer);
         let value = u32::from_be_bytes(tmp);
@@ -68,4 +74,60 @@ impl ControlCommandRequest for GetEndpointIdRequest {
 
 impl ControlCommandResponse for GetEndpointIdResponse {
     type Request = GetEndpointIdRequest;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_endpoint_id_serialize_buffer_bounds() {
+        let response = GetEndpointIdResponse::try_from(0x12345678u32).unwrap();
+
+        // Test with buffer that's too small
+        let mut small_buffer = [0u8; 2]; // Need 3 bytes, only have 2
+        let result = response.serialize(&mut small_buffer);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_endpoint_id_deserialize_buffer_bounds() {
+        // Test with buffer that's too small (less than 3 bytes)
+        let small_buffer = [0x12, 0x34]; // Only 2 bytes, need 3
+        let result = GetEndpointIdResponse::deserialize(&small_buffer);
+        assert!(result.is_err());
+
+        // Test with empty buffer
+        let empty_buffer = [];
+        let result_empty = GetEndpointIdResponse::deserialize(&empty_buffer);
+        assert!(result_empty.is_err());
+    }
+
+    #[test]
+    fn test_get_endpoint_id_serialize_exact_buffer_size() {
+        let response = GetEndpointIdResponse::try_from(0x12345678u32).unwrap();
+
+        // Test with buffer that's exactly the right size
+        let mut exact_buffer = [0u8; 3]; // Exactly 3 bytes needed
+        let result = response.serialize(&mut exact_buffer);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_get_endpoint_id_deserialize_exact_buffer_size() {
+        // Test with buffer that's exactly the right size
+        // Create a valid GetEndpointIdResponse first and serialize it
+        let original_value = 0x12345678u32;
+        let original = GetEndpointIdResponse::try_from(original_value).unwrap();
+        let mut buffer = [0u8; 3];
+        let serialized = original.serialize(&mut buffer).unwrap();
+
+        // Now deserialize it back
+        let result = GetEndpointIdResponse::deserialize(serialized);
+        assert!(result.is_ok());
+        let deserialized = result.unwrap();
+        let expected = GetEndpointIdResponse::try_from(original_value).unwrap();
+        assert_eq!(deserialized, expected);
+    }
 }

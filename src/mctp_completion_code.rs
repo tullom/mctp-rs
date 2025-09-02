@@ -35,8 +35,8 @@ impl TryFrom<u8> for MctpCompletionCode {
             0x03 => MctpCompletionCode::ErrorInvalidLength,
             0x04 => MctpCompletionCode::ErrorNotReady,
             0x05 => MctpCompletionCode::ErrorUnsupportedCmd,
+            0x06..=0x7F => return Err("Invalid value for MCTP completion code - reserved range"),
             0x80..=0xFF => MctpCompletionCode::CommandSpecific(value),
-            _ => return Err("Invalid value for MCTP completion code"),
         })
     }
 }
@@ -58,4 +58,39 @@ impl TryIntoBits<u32> for MctpCompletionCode {
 
 impl NumBytes for MctpCompletionCode {
     const NUM_BYTES: usize = 1;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_completion_code_reserved_range() {
+        // Test that reserved range 0x06-0x7F is properly rejected
+        for code in 0x06..=0x7F {
+            let result = MctpCompletionCode::try_from(code);
+            assert!(result.is_err(), "Code 0x{:02X} should be rejected", code);
+            if let Err(msg) = result {
+                assert!(msg.contains("reserved range"));
+            }
+        }
+
+        // Test valid ranges still work
+        assert_eq!(
+            MctpCompletionCode::try_from(0x00).unwrap(),
+            MctpCompletionCode::Success
+        );
+        assert_eq!(
+            MctpCompletionCode::try_from(0x05).unwrap(),
+            MctpCompletionCode::ErrorUnsupportedCmd
+        );
+        assert_eq!(
+            MctpCompletionCode::try_from(0x80).unwrap(),
+            MctpCompletionCode::CommandSpecific(0x80)
+        );
+        assert_eq!(
+            MctpCompletionCode::try_from(0xFF).unwrap(),
+            MctpCompletionCode::CommandSpecific(0xFF)
+        );
+    }
 }
