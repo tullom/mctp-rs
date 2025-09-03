@@ -1,13 +1,16 @@
 use crate::{
-    MctpMessageHeader, MctpMessageHeaderAndBody, MctpPacketError, error::ProtocolError,
+    MctpMessageHeader, MctpMessageHeaderAndBody, MctpPacketError,
+    error::{MctpPacketResult, ProtocolError},
     mctp_completion_code::MctpCompletionCode,
-    mctp_control_message_header::MctpControlMessageHeader, mctp_message_type::MctpMessageType,
-    mctp_transport_header::MctpTransportHeader, medium::MctpMedium,
+    mctp_control_message_header::MctpControlMessageHeader,
+    mctp_message_type::MctpMessageType,
+    mctp_transport_header::MctpTransportHeader,
+    medium::MctpMedium,
 };
 
 pub(crate) fn parse_transport_header<M: MctpMedium>(
     packet: &[u8],
-) -> Result<(MctpTransportHeader, &[u8]), MctpPacketError<M::Error>> {
+) -> MctpPacketResult<(MctpTransportHeader, &[u8]), M::Error> {
     if packet.len() < 4 {
         return Err(MctpPacketError::HeaderParseError(
             "Packet is too small, cannot parse transport header",
@@ -24,7 +27,7 @@ pub(crate) fn parse_transport_header<M: MctpMedium>(
 
 pub(crate) fn parse_message_body<M: MctpMedium>(
     packet: &[u8],
-) -> Result<(MctpMessageHeaderAndBody<'_>, Option<u8>), MctpPacketError<M::Error>> {
+) -> MctpPacketResult<(MctpMessageHeaderAndBody<'_>, Option<u8>), M::Error> {
     // first four bytes are the message header, parse with MctpMessageHeader
     // to figure out the type, then based on that, parse the type specific header
     if packet.len() < 4 {

@@ -3,26 +3,36 @@ use crate::{
     mctp_message_tag::MctpMessageTag, mctp_sequence_number::MctpSequenceNumber,
 };
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProtocolError {
+    #[error("Expected start of message")]
     ExpectedStartOfMessage,
+    #[error("Unexpected start of message")]
     UnexpectedStartOfMessage,
+    #[error("Message tag mismatch")]
     MessageTagMismatch(MctpMessageTag, MctpMessageTag),
+    #[error("Tag owner mismatch")]
     TagOwnerMismatch(u8, u8),
+    #[error("Source endpoint id mismatch")]
     SourceEndpointIdMismatch(EndpointId, EndpointId),
+    #[error("Unexpected packet sequence number")]
     UnexpectedPacketSequenceNumber(MctpSequenceNumber, MctpSequenceNumber),
+    #[error("Received non-success completion code on request message")]
     CompletionCodeOnRequestMessage(MctpCompletionCode),
+    #[error("Cannot send message while assembling")]
     SendMessageWhileAssembling,
+    #[error("Cannot send message while receiving")]
     SendingMessageWhileReceiving,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum MctpPacketError<MediumError: core::fmt::Debug + Copy + Clone + PartialEq + Eq> {
     HeaderParseError(&'static str),
     CommandParseError(&'static str),
     SerializeError(&'static str),
-    ProtocolError(ProtocolError),
+    ProtocolError(#[from] ProtocolError),
     MediumError(MediumError),
 }
 
 // TODO - MctpPacketResult type alias
+pub type MctpPacketResult<T, MediumError> = Result<T, MctpPacketError<MediumError>>;

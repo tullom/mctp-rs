@@ -1,5 +1,5 @@
 use crate::{
-    MctpPacketError, mctp_packet_context::MctpReplyContext,
+    MctpPacketError, error::MctpPacketResult, mctp_packet_context::MctpReplyContext,
     mctp_transport_header::MctpTransportHeader, medium::MctpMedium,
 };
 
@@ -13,7 +13,7 @@ pub struct SerializePacketState<'source, 'assembly, M: MctpMedium> {
 }
 
 impl<'source, 'assembly, M: MctpMedium> SerializePacketState<'source, 'assembly, M> {
-    pub fn next(&mut self) -> Option<Result<&[u8], MctpPacketError<M::Error>>> {
+    pub fn next(&mut self) -> Option<MctpPacketResult<&[u8], M::Error>> {
         if self.source_buffer.is_empty() {
             return None;
         }

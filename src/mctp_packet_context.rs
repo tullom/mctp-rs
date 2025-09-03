@@ -2,7 +2,7 @@ use crate::{
     AssemblingState, AssemblyState, MctpMessage, MctpPacketError,
     deserialize::{parse_message_body, parse_transport_header},
     endpoint_id::EndpointId,
-    error::ProtocolError,
+    error::{MctpPacketResult, ProtocolError},
     mctp_message_tag::MctpMessageTag,
     mctp_sequence_number::MctpSequenceNumber,
     medium::{MctpMedium, MctpMediumFrame},
@@ -40,7 +40,7 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
     pub fn deserialize_packet(
         &mut self,
         packet: &[u8],
-    ) -> Result<Option<MctpMessage<'_, M>>, MctpPacketError<M::Error>> {
+    ) -> MctpPacketResult<Option<MctpMessage<'_, M>>, M::Error> {
         let (medium_frame, packet) = self
             .medium
             .deserialize(packet)
@@ -157,7 +157,7 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
         &'buf mut self,
         reply_context: MctpReplyContext<M>,
         message: &'source [u8],
-    ) -> Result<SerializePacketState<'source, 'buf, M>, MctpPacketError<M::Error>> {
+    ) -> MctpPacketResult<SerializePacketState<'source, 'buf, M>, M::Error> {
         match self.assembly_state {
             AssemblyState::Idle => {}
             _ => {
