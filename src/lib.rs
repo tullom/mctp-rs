@@ -5,17 +5,19 @@ mod control_command;
 mod endpoint_id;
 mod mctp_command_code;
 mod mctp_completion_code;
+mod mctp_control_message_header;
 mod mctp_message_tag;
 mod mctp_message_type;
 mod mctp_sequence_number;
 mod mctp_transport_header;
 mod medium;
-
+#[cfg(test)]
+mod test_util;
 use bit_register::bit_register;
 use endpoint_id::EndpointId;
 
-use crate::mctp_command_code::MctpCommandCode;
 use crate::mctp_completion_code::MctpCompletionCode;
+use crate::mctp_control_message_header::MctpControlMessageHeader;
 use crate::mctp_message_tag::MctpMessageTag;
 use crate::mctp_message_type::MctpMessageType;
 use crate::mctp_sequence_number::MctpSequenceNumber;
@@ -81,75 +83,27 @@ pub struct MctpReplyContext<M: MctpMedium> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum MctpMessageHeaderAndBody<'buffer> {
     Control {
-        header: MctpControlMessageHeaderBitRegister,
+        header: MctpControlMessageHeader,
         body: &'buffer [u8],
     },
     VendorDefinedPci {
-        header: MctpMessageHeaderBitRegister,
+        header: MctpMessageHeader,
         body: &'buffer [u8],
     },
     VendorDefinedIana {
-        header: MctpMessageHeaderBitRegister,
+        header: MctpMessageHeader,
         body: &'buffer [u8],
     },
 }
 
 bit_register! {
+    /// Generic message header for all MCTP messages. Based off of message_type, the header
+    /// can be interpreted as a more specific header type, such as MctpControlMessageHeader
     #[derive(Debug, Default, PartialEq, Eq, Copy, Clone)]
-    pub struct MctpMessageHeaderBitRegister: little_endian u32 {
+    pub struct MctpMessageHeader: little_endian u32 {
         pub integrity_check: u8 => [31],
         pub message_type: MctpMessageType => [24:30],
         pub rest: u32 => [0:23],
-    }
-}
-
-bit_register! {
-    /// if message_type is MctpMessageType::MctpControl, then the header is a MctpControlMessageHeaderBitRegister
-    /// with message specific fields.
-    #[derive(Debug, Default, PartialEq, Eq, Copy, Clone)]
-    pub struct MctpControlMessageHeaderBitRegister: little_endian u32 {
-        pub integrity_check: u8 => [31],
-        pub message_type: MctpMessageType => [24:30],
-        pub request_bit: u8 => [23],
-        pub datagram_bit: u8 => [22],
-        pub reserved: u8 => [21],
-        pub instance_id: u8 => [16:20],
-        pub command_code: MctpCommandCode => [8:15],
-        pub completion_code: MctpCompletionCode => [0:7],
-    }
-}
-
-#[cfg(test)]
-mod tests_2 {
-    use super::*;
-    #[test]
-    fn test_mctp_control_message_header_bit_register() {
-        assert_eq!(
-            MctpControlMessageHeaderBitRegister::try_from(u32::from_be_bytes([
-                0b0000_0000,
-                0b0000_0000,
-                0b0000_0000,
-                0b0000_0000,
-            ]))
-            .unwrap(),
-            MctpControlMessageHeaderBitRegister {
-                integrity_check: 0,
-                ..Default::default()
-            }
-        );
-        assert_eq!(
-            MctpControlMessageHeaderBitRegister::try_from(u32::from_be_bytes([
-                0b1000_0000,
-                0b0000_0000,
-                0b0000_0000,
-                0b0000_0000,
-            ]))
-            .unwrap(),
-            MctpControlMessageHeaderBitRegister {
-                integrity_check: 1,
-                ..Default::default()
-            }
-        );
     }
 }
 
@@ -228,7 +182,7 @@ impl<'source, 'assembly, M: MctpMedium> SerializePacketState<'source, 'assembly,
                     let start_of_message = if self.current_packet_num == 0 { 1 } else { 0 };
                     let end_of_message = if self.source_buffer.is_empty() { 1 } else { 0 };
                     let packet_sequence_number = self.reply_context.packet_sequence_number.inc();
-                    let transport_header = MctpTransportHeader {
+                    let transport_header: u32 = MctpTransportHeader {
                         reserved: 0,
                         header_version: 1,
                         start_of_message,
@@ -238,13 +192,12 @@ impl<'source, 'assembly, M: MctpMedium> SerializePacketState<'source, 'assembly,
                         message_tag: self.reply_context.message_tag,
                         source_endpoint_id: self.reply_context.destination_endpoint_id,
                         destination_endpoint_id: self.reply_context.source_endpoint_id,
-                    };
-                    let transport_header_value: u32 = transport_header
-                        .try_into()
-                        .map_err(MctpPacketError::SerializeError)?;
+                    }
+                    .try_into()
+                    .map_err(MctpPacketError::SerializeError)?;
 
                     // transport header is the first 4 bytes of the buffer
-                    buffer[0..4].copy_from_slice(&transport_header_value.to_be_bytes());
+                    buffer[0..4].copy_from_slice(&transport_header.to_be_bytes());
                     // message body is the rest of the buffer, up to the packet size
                     buffer[4..4 + body_size].copy_from_slice(body);
                     Ok(4 + body_size)
@@ -414,7 +367,7 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
         &'s self,
         packet: &'s [u8],
     ) -> Result<(MctpMessageHeaderAndBody<'s>, Option<u8>), MctpPacketError<M::Error>> {
-        // first four bytes are the message header, parse with MctpMessageHeaderBitRegister
+        // first four bytes are the message header, parse with MctpMessageHeader
         // to figure out the type, then based on that, parse the type specific header
         if packet.len() < 4 {
             return Err(MctpPacketError::HeaderParseError(
@@ -424,13 +377,13 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
         let header_u32 = u32::from_be_bytes(packet[0..4].try_into().map_err(|_| {
             MctpPacketError::HeaderParseError("packet < 4 bytes for message header")
         })?);
-        let header = MctpMessageHeaderBitRegister::try_from(header_u32)
-            .map_err(MctpPacketError::HeaderParseError)?;
+        let header =
+            MctpMessageHeader::try_from(header_u32).map_err(MctpPacketError::HeaderParseError)?;
         let packet = &packet[4..];
 
         let header_and_body = match header.message_type {
             MctpMessageType::MctpControl => {
-                let header = MctpControlMessageHeaderBitRegister::try_from(header_u32)
+                let header = MctpControlMessageHeader::try_from(header_u32)
                     .map_err(MctpPacketError::HeaderParseError)?;
 
                 // completion code is only present on reponse message
@@ -487,106 +440,8 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
 #[cfg(test)]
 mod mctp_context_tests {
     use super::*;
-    use crate::medium::{MctpMediumFrame, MediumOrGenericError};
+    use crate::{mctp_command_code::MctpCommandCode, test_util::*};
     use pretty_assertions::assert_eq;
-
-    #[derive(Debug, PartialEq, Eq, Copy, Clone)]
-    struct TestMedium {
-        header: &'static [u8],
-        trailer: &'static [u8],
-        mtu: usize,
-    }
-    impl TestMedium {
-        fn new() -> Self {
-            Self {
-                header: &[],
-                trailer: &[],
-                mtu: 32,
-            }
-        }
-        fn with_headers(mut self, header: &'static [u8], trailer: &'static [u8]) -> Self {
-            self.header = header;
-            self.trailer = trailer;
-            self
-        }
-        fn with_mtu(mut self, mtu: usize) -> Self {
-            self.mtu = mtu;
-            self
-        }
-    }
-
-    #[derive(Debug, PartialEq, Eq, Copy, Clone)]
-    struct TestMediumFrame(usize);
-
-    impl MctpMedium for TestMedium {
-        type Frame = TestMediumFrame;
-        type Error = &'static str;
-        type ReplyContext = ();
-
-        fn deserialize<'buf>(
-            &self,
-            packet: &'buf [u8],
-        ) -> Result<(Self::Frame, &'buf [u8]), Self::Error> {
-            let packet_len = packet.len();
-
-            // check that header / trailer is present and correct
-            if packet.len() < self.header.len() + self.trailer.len() {
-                return Err("packet too short");
-            }
-            if packet[0..self.header.len()] != *self.header {
-                return Err("header mismatch");
-            }
-            if packet[packet_len - self.trailer.len()..packet_len] != *self.trailer {
-                return Err("trailer mismatch");
-            }
-
-            let packet = &packet[self.header.len()..packet_len - self.trailer.len()];
-            Ok((TestMediumFrame(packet_len), packet))
-        }
-        fn max_message_body_size(&self) -> usize {
-            self.mtu
-        }
-        fn serialize<'buf, E, F>(
-            &self,
-            _: Self::ReplyContext,
-            buffer: &'buf mut [u8],
-            message_writer: F,
-        ) -> Result<&'buf [u8], MediumOrGenericError<Self::Error, E>>
-        where
-            F: for<'a> FnOnce(&'a mut [u8]) -> Result<usize, E>,
-        {
-            let header_len = self.header.len();
-            let trailer_len = self.trailer.len();
-
-            // Ensure buffer can fit at least headers and trailers
-            if buffer.len() < header_len + trailer_len {
-                return Err(MediumOrGenericError::Medium("Buffer too small for headers"));
-            }
-
-            // Calculate available space for message (respecting MTU)
-            let max_packet_size = self.mtu.min(buffer.len());
-            if max_packet_size < header_len + trailer_len {
-                return Err(MediumOrGenericError::Medium("MTU too small for headers"));
-            }
-            let max_message_size = max_packet_size - header_len - trailer_len;
-
-            buffer[0..header_len].copy_from_slice(self.header);
-            let size = message_writer(&mut buffer[header_len..header_len + max_message_size])
-                .map_err(MediumOrGenericError::Generic)?;
-            let len = header_len + size;
-            buffer[len..len + trailer_len].copy_from_slice(self.trailer);
-            Ok(&buffer[..len + trailer_len])
-        }
-    }
-
-    impl MctpMediumFrame<TestMedium> for TestMediumFrame {
-        fn packet_size(&self) -> usize {
-            self.0
-        }
-        fn reply_context(&self) -> <TestMedium as MctpMedium>::ReplyContext {
-            ()
-        }
-    }
 
     struct Packet(&'static [u8]);
     const GET_ENDPOINT_ID_PACKET_NO_EOM: Packet = Packet(&[
@@ -638,7 +493,7 @@ mod mctp_context_tests {
                     medium_context: (),
                 },
                 header_and_body: MctpMessageHeaderAndBody::Control {
-                    header: MctpControlMessageHeaderBitRegister {
+                    header: MctpControlMessageHeader {
                         integrity_check: 0,
                         message_type: MctpMessageType::MctpControl,
                         command_code: MctpCommandCode::GetEndpointId,

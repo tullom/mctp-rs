@@ -55,8 +55,4 @@ where
 pub trait MctpMediumFrame<M: MctpMedium>: Clone + Copy {
     fn packet_size(&self) -> usize;
     fn reply_context(&self) -> M::ReplyContext;
-    // serialize the packet into the medium specific header and the payload
-    // fn serialize<'buf>(&self, buffer: &'buf mut [u8]) -> Result<&'buf [u8], M::Error>;
-    // fn serialize_frame_trailer<'buf>(&self, buffer: &'buf mut [u8])
-    // -> Result<&'buf [u8], M::Error>;
 }
