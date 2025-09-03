@@ -40,11 +40,8 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
     pub fn deserialize_packet(
         &mut self,
         packet: &[u8],
-    ) -> MctpPacketResult<Option<MctpMessage<'_, M>>, M::Error> {
-        let (medium_frame, packet) = self
-            .medium
-            .deserialize(packet)
-            .map_err(MctpPacketError::MediumError)?;
+    ) -> MctpPacketResult<Option<MctpMessage<'_, M>>, M> {
+        let (medium_frame, packet) = self.medium.deserialize(packet)?;
         let (transport_header, packet) = parse_transport_header::<M>(packet)?;
 
         let mut state = match self.assembly_state {
@@ -157,7 +154,7 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
         &'buf mut self,
         reply_context: MctpReplyContext<M>,
         message: &'source [u8],
-    ) -> MctpPacketResult<SerializePacketState<'source, 'buf, M>, M::Error> {
+    ) -> MctpPacketResult<SerializePacketState<'source, 'buf, M>, M> {
         match self.assembly_state {
             AssemblyState::Idle => {}
             _ => {

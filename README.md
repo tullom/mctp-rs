@@ -120,7 +120,7 @@ impl MctpMedium for MyMedium {
     fn deserialize<'buf>(
         &self,
         packet: &'buf [u8],
-    ) -> Result<(Self::Frame, &'buf [u8]), Self::Error> {
+    ) -> MctpPacketResult<(Self::Frame, &'buf [u8]), Self> {
         // Parse medium-specific headers and return MCTP payload
         Ok((MyMediumFrame { packet_size: packet.len() }, packet))
     }
@@ -130,12 +130,12 @@ impl MctpMedium for MyMedium {
         _reply_context: Self::ReplyContext,
         buffer: &'buf mut [u8],
         message_writer: F,
-    ) -> Result<&'buf [u8], MediumOrGenericError<Self::Error, E>>
+    ) -> MctpPacketResult<&'buf [u8], Self>
     where
-        F: for<'a> FnOnce(&'a mut [u8]) -> Result<usize, E>,
+        F: for<'a> FnOnce(&'a mut [u8]) -> MctpPacketResult<usize, Self>,
     {
         // Write medium-specific headers, call message_writer for MCTP data
-        let message_len = message_writer(buffer).map_err(MediumOrGenericError::Generic)?;
+        let message_len = message_writer(buffer)?;
         Ok(&buffer[..message_len])
     }
 }

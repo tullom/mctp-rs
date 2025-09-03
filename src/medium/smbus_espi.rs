@@ -1,6 +1,11 @@
-use crate::medium::{MctpMedium, MctpMediumFrame, MediumOrGenericError, util::Zero};
+use crate::{
+    MctpPacketError,
+    error::MctpPacketResult,
+    medium::{MctpMedium, MctpMediumFrame, util::Zero},
+};
 use bit_register::{NumBytes, TryFromBits, TryIntoBits, bit_register};
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 struct SmbusEspiMedium;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -17,23 +22,26 @@ impl MctpMedium for SmbusEspiMedium {
     fn deserialize<'buf>(
         &self,
         packet: &'buf [u8],
-    ) -> Result<(Self::Frame, &'buf [u8]), Self::Error> {
+    ) -> MctpPacketResult<(Self::Frame, &'buf [u8]), Self> {
         // Check if packet has enough bytes for header
         if packet.len() < 4 {
-            return Err("Packet too short to parse smbus header");
+            return Err(MctpPacketError::MediumError(
+                "Packet too short to parse smbus header",
+            ));
         }
 
-        let header_value = u32::from_be_bytes(
-            packet[0..4]
-                .try_into()
-                .map_err(|_| "Packet too short to parse smbus header")?,
-        );
+        let header_value =
+            u32::from_be_bytes(packet[0..4].try_into().map_err(|_| {
+                MctpPacketError::MediumError("Packet too short to parse smbus header")
+            })?);
         // strip off the smbus header
         let packet = &packet[4..];
-        let header =
-            SmbusEspiMediumHeader::try_from(header_value).map_err(|_| "Invalid smbus header")?;
+        let header = SmbusEspiMediumHeader::try_from(header_value)
+            .map_err(|_| MctpPacketError::MediumError("Invalid smbus header"))?;
         if header.byte_count as usize + 1 > packet.len() {
-            return Err("Packet too short to parse smbus body and PEC");
+            return Err(MctpPacketError::MediumError(
+                "Packet too short to parse smbus body and PEC",
+            ));
         }
         let pec = packet[header.byte_count as usize];
         // strip off the PEC byte
@@ -41,18 +49,18 @@ impl MctpMedium for SmbusEspiMedium {
         Ok((SmbusEspiMediumFrame { header, pec }, packet))
     }
 
-    fn serialize<'buf, E, F>(
+    fn serialize<'buf, F>(
         &self,
         reply_context: Self::ReplyContext,
         buffer: &'buf mut [u8],
         message_writer: F,
-    ) -> Result<&'buf [u8], MediumOrGenericError<Self::Error, E>>
+    ) -> MctpPacketResult<&'buf [u8], Self>
     where
-        F: for<'a> FnOnce(&'a mut [u8]) -> Result<usize, E>,
+        F: for<'a> FnOnce(&'a mut [u8]) -> MctpPacketResult<usize, Self>,
     {
         // Reserve space for header (4 bytes) and PEC (1 byte)
         if buffer.len() < 5 {
-            return Err(MediumOrGenericError::Medium(
+            return Err(MctpPacketError::MediumError(
                 "Buffer too small for smbus frame",
             ));
         }
@@ -62,11 +70,10 @@ impl MctpMedium for SmbusEspiMedium {
 
         // Write the body first, but ensure we leave space for PEC
         if body.is_empty() {
-            return Err(MediumOrGenericError::Medium("No space for PEC byte"));
+            return Err(MctpPacketError::MediumError("No space for PEC byte"));
         }
         let available_body_len = body.len() - 1; // Reserve 1 byte for PEC
-        let body_len = message_writer(&mut body[..available_body_len])
-            .map_err(MediumOrGenericError::Generic)?;
+        let body_len = message_writer(&mut body[..available_body_len])?;
 
         // with the body has been written, construct the header
         let header = SmbusEspiMediumHeader {
@@ -77,7 +84,7 @@ impl MctpMedium for SmbusEspiMedium {
             ..Default::default()
         };
         let header_value =
-            TryInto::<u32>::try_into(header).map_err(MediumOrGenericError::Medium)?;
+            TryInto::<u32>::try_into(header).map_err(MctpPacketError::MediumError)?;
         header_slice.copy_from_slice(&header_value.to_be_bytes());
 
         // with the header written, compute the PEC byte
@@ -161,7 +168,6 @@ impl MctpMediumFrame<SmbusEspiMedium> for SmbusEspiMediumFrame {
 mod tests {
     extern crate std;
     use super::*;
-    use crate::medium::MediumOrGenericError;
 
     #[test]
     fn test_deserialize_valid_packet() {
@@ -207,7 +213,12 @@ mod tests {
         let short_packet = [0x01, 0x02]; // Only 2 bytes, need at least 4 for header
 
         let result = medium.deserialize(&short_packet);
-        assert_eq!(result, Err("Packet too short to parse smbus header"));
+        assert_eq!(
+            result,
+            Err(MctpPacketError::MediumError(
+                "Packet too short to parse smbus header"
+            ))
+        );
     }
 
     #[test]
@@ -229,7 +240,12 @@ mod tests {
         packet[4..6].copy_from_slice(&short_payload);
 
         let result = medium.deserialize(&packet);
-        assert_eq!(result, Err("Packet too short to parse smbus body and PEC"));
+        assert_eq!(
+            result,
+            Err(MctpPacketError::MediumError(
+                "Packet too short to parse smbus body and PEC"
+            ))
+        );
     }
 
     #[test]
@@ -253,7 +269,10 @@ mod tests {
         packet[8] = pec;
 
         let result = medium.deserialize(&packet);
-        assert_eq!(result, Err("Invalid smbus header"));
+        assert_eq!(
+            result,
+            Err(MctpPacketError::MediumError("Invalid smbus header"))
+        );
     }
 
     #[test]
@@ -295,7 +314,7 @@ mod tests {
         let result = medium
             .serialize(reply_context, &mut buffer, |buf| {
                 buf[..test_payload.len()].copy_from_slice(&test_payload);
-                Ok::<usize, &'static str>(test_payload.len())
+                Ok(test_payload.len())
             })
             .unwrap();
 
@@ -331,13 +350,11 @@ mod tests {
 
         let mut small_buffer = [0u8; 4]; // Only 4 bytes, need at least 5 (header + PEC)
 
-        let result = medium.serialize(reply_context, &mut small_buffer, |_| {
-            Ok::<usize, &'static str>(0)
-        });
+        let result = medium.serialize(reply_context, &mut small_buffer, |_| Ok(0));
 
         assert_eq!(
             result,
-            Err(MediumOrGenericError::Medium(
+            Err(MctpPacketError::MediumError(
                 "Buffer too small for smbus frame"
             ))
         );
@@ -357,7 +374,7 @@ mod tests {
             .serialize(
                 reply_context,
                 &mut minimal_buffer,
-                |_| Ok::<usize, &'static str>(0), // No payload data
+                |_| Ok(0), // No payload data
             )
             .unwrap();
 
@@ -389,7 +406,7 @@ mod tests {
             .serialize(reply_context, &mut buffer, |buf| {
                 let copy_len = max_payload.len().min(buf.len());
                 buf[..copy_len].copy_from_slice(&max_payload[..copy_len]);
-                Ok::<usize, &'static str>(copy_len)
+                Ok(copy_len)
             })
             .unwrap();
 
@@ -419,10 +436,10 @@ mod tests {
         let mut buffer = [0u8; 64];
 
         let result = medium.serialize(reply_context, &mut buffer, |_| {
-            Err::<usize, &'static str>("Test error")
+            Err(MctpPacketError::MediumError("Test error"))
         });
 
-        assert_eq!(result, Err(MediumOrGenericError::Generic("Test error")));
+        assert_eq!(result, Err(MctpPacketError::MediumError("Test error")));
     }
 
     #[test]
@@ -440,7 +457,7 @@ mod tests {
         let serialized = medium
             .serialize(original_context, &mut buffer, |buf| {
                 buf[..original_payload.len()].copy_from_slice(&original_payload);
-                Ok::<usize, &'static str>(original_payload.len())
+                Ok(original_payload.len())
             })
             .unwrap();
 
@@ -551,7 +568,7 @@ mod tests {
         let result = medium
             .serialize(reply_context, &mut buffer, |buf| {
                 buf[..test_data.len()].copy_from_slice(&test_data);
-                Ok::<usize, &'static str>(test_data.len())
+                Ok(test_data.len())
             })
             .unwrap();
 
@@ -577,7 +594,7 @@ mod tests {
             .serialize(
                 reply_context,
                 &mut buffer,
-                |_| Ok::<usize, &'static str>(0), // Empty payload
+                |_| Ok(0), // Empty payload
             )
             .unwrap();
 
@@ -622,7 +639,7 @@ mod tests {
         let mut buffer = [0u8; 16];
 
         let result = medium
-            .serialize(reply_context, &mut buffer, |_| Ok::<usize, &'static str>(0))
+            .serialize(reply_context, &mut buffer, |_| Ok(0))
             .unwrap();
 
         let header_value = u32::from_be_bytes([result[0], result[1], result[2], result[3]]);
@@ -688,7 +705,12 @@ mod tests {
         packet[6] = 0x00; // PEC (doesn't matter for this test)
 
         let result = medium.deserialize(&packet);
-        assert_eq!(result, Err("Packet too short to parse smbus body and PEC"));
+        assert_eq!(
+            result,
+            Err(MctpPacketError::MediumError(
+                "Packet too short to parse smbus body and PEC"
+            ))
+        );
     }
 
     #[test]
@@ -703,12 +725,12 @@ mod tests {
         let mut tiny_buffer = [0u8; 4]; // Only 4 bytes, need at least 5
 
         let result = medium.serialize(reply_context, &mut tiny_buffer, |_| {
-            Ok::<usize, &'static str>(0) // No payload
+            Ok(0) // No payload
         });
 
         assert_eq!(
             result,
-            Err(MediumOrGenericError::Medium(
+            Err(MctpPacketError::MediumError(
                 "Buffer too small for smbus frame"
             ))
         );
@@ -722,7 +744,12 @@ mod tests {
         for packet_size in 0..4 {
             let short_packet = [0u8; 4];
             let result = medium.deserialize(&short_packet[..packet_size]);
-            assert_eq!(result, Err("Packet too short to parse smbus header"));
+            assert_eq!(
+                result,
+                Err(MctpPacketError::MediumError(
+                    "Packet too short to parse smbus header"
+                ))
+            );
         }
     }
 
@@ -745,7 +772,12 @@ mod tests {
         packet[4..9].copy_from_slice(&payload);
 
         let result = medium.deserialize(&packet);
-        assert_eq!(result, Err("Packet too short to parse smbus body and PEC"));
+        assert_eq!(
+            result,
+            Err(MctpPacketError::MediumError(
+                "Packet too short to parse smbus body and PEC"
+            ))
+        );
     }
 
     #[test]
@@ -765,7 +797,12 @@ mod tests {
         short_packet.copy_from_slice(&header_bytes);
 
         let result = medium.deserialize(&short_packet);
-        assert_eq!(result, Err("Packet too short to parse smbus body and PEC"));
+        assert_eq!(
+            result,
+            Err(MctpPacketError::MediumError(
+                "Packet too short to parse smbus body and PEC"
+            ))
+        );
     }
 
     #[test]
@@ -784,7 +821,7 @@ mod tests {
         let result = medium.serialize(reply_context, &mut buffer, |buf| {
             let copy_len = max_payload.len().min(buf.len());
             buf[..copy_len].copy_from_slice(&max_payload[..copy_len]);
-            Ok::<usize, &'static str>(copy_len)
+            Ok(copy_len)
         });
 
         assert!(result.is_ok());
@@ -797,7 +834,7 @@ mod tests {
             // Try to write max payload but buffer is too small
             let copy_len = max_payload.len().min(buf.len());
             buf[..copy_len].copy_from_slice(&max_payload[..copy_len]);
-            Ok::<usize, &'static str>(copy_len)
+            Ok(copy_len)
         });
 
         // Should still work but with truncated payload (254 bytes payload + 4 header + 1 PEC = 259)

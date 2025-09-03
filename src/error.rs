@@ -1,6 +1,6 @@
 use crate::{
     endpoint_id::EndpointId, mctp_completion_code::MctpCompletionCode,
-    mctp_message_tag::MctpMessageTag, mctp_sequence_number::MctpSequenceNumber,
+    mctp_message_tag::MctpMessageTag, mctp_sequence_number::MctpSequenceNumber, medium::MctpMedium,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
@@ -26,13 +26,13 @@ pub enum ProtocolError {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum MctpPacketError<MediumError: core::fmt::Debug + Copy + Clone + PartialEq + Eq> {
+pub enum MctpPacketError<M: MctpMedium> {
     HeaderParseError(&'static str),
     CommandParseError(&'static str),
     SerializeError(&'static str),
     ProtocolError(#[from] ProtocolError),
-    MediumError(MediumError),
+    MediumError(M::Error),
 }
 
 // TODO - MctpPacketResult type alias
-pub type MctpPacketResult<T, MediumError> = Result<T, MctpPacketError<MediumError>>;
+pub type MctpPacketResult<T, Medium> = Result<T, MctpPacketError<Medium>>;

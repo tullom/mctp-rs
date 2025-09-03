@@ -1,4 +1,4 @@
-use crate::MctpPacketError;
+use crate::error::MctpPacketResult;
 
 mod smbus_espi;
 mod util;
@@ -21,35 +21,17 @@ pub trait MctpMedium: Sized {
     fn deserialize<'buf>(
         &self,
         packet: &'buf [u8],
-    ) -> Result<(Self::Frame, &'buf [u8]), Self::Error>;
+    ) -> MctpPacketResult<(Self::Frame, &'buf [u8]), Self>;
 
     /// serialize the packet into the medium specific header and the payload
-    fn serialize<'buf, E, F>(
+    fn serialize<'buf, F>(
         &self,
         reply_context: Self::ReplyContext,
         buffer: &'buf mut [u8],
         message_writer: F,
-    ) -> Result<&'buf [u8], MediumOrGenericError<Self::Error, E>>
+    ) -> MctpPacketResult<&'buf [u8], Self>
     where
-        F: for<'a> FnOnce(&'a mut [u8]) -> Result<usize, E>;
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum MediumOrGenericError<M, G> {
-    Medium(M),
-    Generic(G),
-}
-
-impl<E> From<MediumOrGenericError<E, MctpPacketError<E>>> for MctpPacketError<E>
-where
-    E: core::fmt::Debug + Copy + Clone + PartialEq + Eq,
-{
-    fn from(value: MediumOrGenericError<E, MctpPacketError<E>>) -> Self {
-        match value {
-            MediumOrGenericError::Medium(e) => MctpPacketError::MediumError(e),
-            MediumOrGenericError::Generic(e) => e,
-        }
-    }
+        F: for<'a> FnOnce(&'a mut [u8]) -> MctpPacketResult<usize, Self>;
 }
 
 pub trait MctpMediumFrame<M: MctpMedium>: Clone + Copy {
