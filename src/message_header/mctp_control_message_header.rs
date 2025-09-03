@@ -1,3 +1,4 @@
+use crate::MctpMessageHeader;
 use crate::mctp_command_code::MctpCommandCode;
 use crate::mctp_completion_code::MctpCompletionCode;
 use crate::mctp_message_type::MctpMessageType;
@@ -12,10 +13,16 @@ bit_register! {
         pub message_type: MctpMessageType => [24:30],
         pub request_bit: u8 => [23],
         pub datagram_bit: u8 => [22],
-        pub reserved: u8 => [21],
         pub instance_id: u8 => [16:20],
         pub command_code: MctpCommandCode => [8:15],
         pub completion_code: MctpCompletionCode => [0:7],
+    }
+}
+
+impl From<MctpControlMessageHeader> for MctpMessageHeader {
+    fn from(header: MctpControlMessageHeader) -> Self {
+        let as_u32: u32 = header.try_into().unwrap();
+        MctpMessageHeader::try_from(as_u32).unwrap()
     }
 }
 
@@ -47,6 +54,23 @@ mod tests {
             .unwrap(),
             MctpControlMessageHeader {
                 integrity_check: 1,
+                ..Default::default()
+            }
+        );
+    }
+
+    fn test_into_mctp_message_header() {
+        let header = MctpControlMessageHeader {
+            integrity_check: 0,
+            message_type: MctpMessageType::MctpControl,
+            ..Default::default()
+        };
+        let message_header: MctpMessageHeader = header.into();
+        assert_eq!(
+            message_header,
+            MctpMessageHeader {
+                integrity_check: 0,
+                message_type: MctpMessageType::MctpControl,
                 ..Default::default()
             }
         );

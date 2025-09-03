@@ -1,5 +1,5 @@
 use crate::{
-    endpoint_id::EndpointId, mctp_completion_code::MctpCompletionCode,
+    MctpMessageType, endpoint_id::EndpointId, mctp_completion_code::MctpCompletionCode,
     mctp_message_tag::MctpMessageTag, mctp_sequence_number::MctpSequenceNumber, medium::MctpMedium,
 };
 
@@ -30,6 +30,7 @@ pub enum MctpPacketError<M: MctpMedium> {
     HeaderParseError(&'static str),
     CommandParseError(&'static str),
     SerializeError(&'static str),
+    UnsupportedMessageType(MctpMessageType),
     ProtocolError(#[from] ProtocolError),
     MediumError(M::Error),
 }

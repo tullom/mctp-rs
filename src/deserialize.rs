@@ -1,8 +1,8 @@
 use crate::{
-    MctpMessageHeader, MctpMessageHeaderAndBody, MctpPacketError,
+    MctpControlMessageHeader, MctpMessageHeader, MctpMessageHeaderAndBody, MctpPacketError,
+    MctpVendorDefinedPciMessageHeader,
     error::{MctpPacketResult, ProtocolError},
     mctp_completion_code::MctpCompletionCode,
-    mctp_control_message_header::MctpControlMessageHeader,
     mctp_message_type::MctpMessageType,
     mctp_transport_header::MctpTransportHeader,
     medium::MctpMedium,
@@ -64,10 +64,14 @@ pub(crate) fn parse_message_body<M: MctpMedium>(
             header,
             body: packet,
         },
-        MctpMessageType::VendorDefinedPci => MctpMessageHeaderAndBody::VendorDefinedPci {
-            header,
-            body: packet,
-        },
+        MctpMessageType::VendorDefinedPci => {
+            let header = MctpVendorDefinedPciMessageHeader::try_from(header_u32)
+                .map_err(MctpPacketError::HeaderParseError)?;
+            MctpMessageHeaderAndBody::VendorDefinedPci {
+                header,
+                body: packet,
+            }
+        }
         _ => return Err(MctpPacketError::HeaderParseError("Invalid message type")),
     };
 

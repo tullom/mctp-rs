@@ -1,5 +1,5 @@
 use crate::{
-    MctpMessage, MctpPacketError,
+    MctpMessage, MctpMessageHeaderAndBody, MctpPacketError,
     deserialize::{parse_message_body, parse_transport_header},
     endpoint_id::EndpointId,
     error::{MctpPacketResult, ProtocolError},
@@ -153,7 +153,7 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
     pub fn serialize_packet<'source>(
         &'buf mut self,
         reply_context: MctpReplyContext<M>,
-        message: &'source [u8],
+        message: MctpMessageHeaderAndBody<'source>,
     ) -> MctpPacketResult<SerializePacketState<'source, 'buf, M>, M> {
         match self.assembly_state {
             AssemblyState::Idle => {}
@@ -163,11 +163,14 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
                 ));
             }
         };
+
         Ok(SerializePacketState {
             medium: &self.medium,
             reply_context,
             current_packet_num: 0,
-            source_buffer: message,
+            serialized_message_header: false,
+            source_message_header: Some(message.header()),
+            source_message_body: message.body(),
             assembly_buffer: self.packet_assembly_buffer,
         })
     }

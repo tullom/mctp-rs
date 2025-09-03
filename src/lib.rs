@@ -1,5 +1,6 @@
 #![no_std]
 #![allow(dead_code)]
+extern crate std;
 
 mod control_command;
 mod deserialize;
@@ -7,26 +8,27 @@ mod endpoint_id;
 mod error;
 mod mctp_command_code;
 mod mctp_completion_code;
-mod mctp_control_message_header;
 mod mctp_message_tag;
 mod mctp_message_type;
 mod mctp_packet_context;
 mod mctp_sequence_number;
 mod mctp_transport_header;
 mod medium;
+mod message_header;
 mod serialize;
 #[cfg(test)]
 mod test_util;
 
 pub use crate::error::MctpPacketError;
-pub use crate::mctp_control_message_header::MctpControlMessageHeader;
+use crate::mctp_command_code::MctpCommandCode;
+use crate::mctp_completion_code::MctpCompletionCode;
 pub use crate::mctp_message_tag::MctpMessageTag;
 pub use crate::mctp_message_type::MctpMessageType;
 pub use crate::mctp_packet_context::MctpPacketContext;
 pub use crate::mctp_packet_context::MctpReplyContext;
 pub use crate::mctp_sequence_number::MctpSequenceNumber;
 pub use crate::medium::MctpMedium;
-use bit_register::bit_register;
+pub use crate::message_header::*;
 pub use endpoint_id::EndpointId;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -43,23 +45,78 @@ pub enum MctpMessageHeaderAndBody<'buffer> {
         body: &'buffer [u8],
     },
     VendorDefinedPci {
-        header: MctpMessageHeader,
+        // TODO -  PCI specific message header (pci vendor id)
+        header: MctpVendorDefinedPciMessageHeader,
         body: &'buffer [u8],
     },
     VendorDefinedIana {
+        // TODO - IANA specific message header (iana enterprise id)
         header: MctpMessageHeader,
         body: &'buffer [u8],
     },
 }
 
-bit_register! {
-    /// Generic message header for all MCTP messages. Based off of message_type, the header
-    /// can be interpreted as a more specific header type, such as MctpControlMessageHeader
-    #[derive(Debug, Default, PartialEq, Eq, Copy, Clone)]
-    pub struct MctpMessageHeader: little_endian u32 {
-        pub integrity_check: u8 => [31],
-        pub message_type: MctpMessageType => [24:30],
-        pub rest: u32 => [0:23],
+impl<'buffer> MctpMessageHeaderAndBody<'buffer> {
+    pub fn control(
+        request_bit: bool,
+        datagram_bit: bool,
+        instance_id: u8,
+        command_code: MctpCommandCode,
+        completion_code: MctpCompletionCode,
+        body: &'buffer [u8],
+    ) -> Self {
+        Self::Control {
+            header: MctpControlMessageHeader {
+                integrity_check: 0,
+                message_type: MctpMessageType::MctpControl,
+                request_bit: request_bit as u8,
+                datagram_bit: datagram_bit as u8,
+                instance_id,
+                command_code,
+                completion_code,
+            },
+            body,
+        }
+    }
+    pub fn vendor_defined_pci(
+        integrity_check: u8,
+        pci_vendor_id: u16,
+        body: &'buffer [u8],
+    ) -> Self {
+        Self::VendorDefinedPci {
+            header: MctpVendorDefinedPciMessageHeader {
+                integrity_check,
+                message_type: MctpMessageType::VendorDefinedPci,
+                pci_vendor_id,
+            },
+            body,
+        }
+    }
+    pub fn vendor_defined_iana(integrity_check: u8, body: &'buffer [u8]) -> Self {
+        Self::VendorDefinedIana {
+            header: MctpMessageHeader {
+                integrity_check,
+                message_type: MctpMessageType::VendorDefinedIana,
+                rest: 0,
+            },
+            body,
+        }
+    }
+
+    pub(crate) fn body(&self) -> &'buffer [u8] {
+        match self {
+            Self::Control { body, .. } => body,
+            Self::VendorDefinedPci { body, .. } => body,
+            Self::VendorDefinedIana { body, .. } => body,
+        }
+    }
+
+    pub(crate) fn header(&self) -> MctpMessageHeader {
+        match self {
+            Self::Control { header, .. } => (*header).into(),
+            Self::VendorDefinedPci { header, .. } => (*header).into(),
+            Self::VendorDefinedIana { header, .. } => *header,
+        }
     }
 }
 
@@ -228,7 +285,9 @@ mod tests {
             medium_context: (),
         };
 
-        let mut state = context.serialize_packet(reply_context, &[0xA5]).unwrap();
+        let message = MctpMessageHeaderAndBody::vendor_defined_pci(0, 0, &[0xA5]);
+
+        let mut state = context.serialize_packet(reply_context, message).unwrap();
 
         let packet = state.next().unwrap().unwrap();
         assert_eq!(
@@ -242,7 +301,11 @@ mod tests {
                 192,         // destination endpoint id
                 236,         // source endpoint id
                 0b1110_0011, // som (1), eom (1), seq (2), tag owner (0), message tag (3)
-                // mctp body data - 1 byte
+                // mctp message header - 3 bytes
+                0x7E, // integrity check (0), message type (vendor defined pci)
+                0x00, // pci vendor id - low byte
+                0x00, // pci vendor id - high byte
+                // mctp message body - 1 byte
                 0xA5,
                 // test trailer - 2 bytes
                 0xC,
@@ -253,12 +316,13 @@ mod tests {
 
     #[test]
     fn test_send_packet_multi() {
+        const MTU_SIZE: usize = 14;
         let mut buffer = [0; 1024];
         let mut context = MctpPacketContext::<TestMedium>::new(
             TestMedium::new()
                 .with_headers(&[0xA, 0xB], &[0xC, 0xD])
                 // 4 bytes transport header + 4 bytes of data
-                .with_mtu(12),
+                .with_mtu(MTU_SIZE),
             &mut buffer,
         );
 
@@ -272,80 +336,83 @@ mod tests {
 
         // 10 byte to send over 3 packets
         let data_to_send = [0xA5, 0xB6, 0xC7, 0xD8, 0xE9, 0xFA, 0x0B, 0x1C, 0x2D, 0x3E];
+        let message = MctpMessageHeaderAndBody::vendor_defined_pci(0, 0x1234, &data_to_send);
 
-        let mut state = context
-            .serialize_packet(reply_context, &data_to_send)
-            .unwrap();
+        let mut state = context.serialize_packet(reply_context, message).unwrap();
 
         // First packet
         let packet1 = state.next().unwrap().unwrap();
-        assert_eq!(
-            packet1,
-            &[
-                // test header - 2 bytes
-                0xA,
-                0xB,
-                // mctp transport header - 4 bytes
-                0b0000_0001, // mctp reserved, header version
-                192,         // destination endpoint id
-                236,         // source endpoint id
-                0b1010_0011, // som (1), eom (0), seq (2), tag owner (0), message tag (3)
-                // mctp body data - 4 bytes
-                0xA5,
-                0xB6,
-                0xC7,
-                0xD8,
-                // test trailer - 2 bytes
-                0xC,
-                0xD,
-            ]
-        );
+        let expected: [u8; MTU_SIZE] = [
+            // test header - 2 bytes
+            0xA,
+            0xB,
+            // mctp transport header - 4 bytes
+            0b0000_0001, // mctp reserved, header version
+            192,         // destination endpoint id
+            236,         // source endpoint id
+            0b1010_0011, // som (1), eom (0), seq (2), tag owner (0), message tag (3)
+            // mctp message header - 3 bytes
+            0x7E, // integrity check (0), message type (vendor defined pci)
+            0x12, // pci vendor id - low byte
+            0x34, // pci vendor id - high byte
+            // mctp message body data - 1 bytes
+            0xA5,
+            0xB6,
+            0xC7,
+            // test trailer - 2 bytes
+            0xC,
+            0xD,
+        ];
+        assert_eq!(packet1, &expected[..MTU_SIZE]);
 
         // Second packet (middle packet with 4 bytes of data)
         let packet2 = state.next().unwrap().unwrap();
-        assert_eq!(
-            packet2,
-            &[
-                // test header - 2 bytes
-                0xA,
-                0xB,
-                // mctp transport header - 4 bytes
-                0b0000_0001, // mctp reserved, header version
-                192,         // destination endpoint id
-                236,         // source endpoint id
-                0b0011_0011, // som (0), eom (0), seq (3), tag owner (0), message tag (3)
-                // mctp body data - 4 bytes
-                0xE9,
-                0xFA,
-                0x0B,
-                0x1C,
-                // test trailer - 2 bytes
-                0xC,
-                0xD,
-            ]
-        );
+        let expected: [u8; MTU_SIZE] = [
+            // test header - 2 bytes
+            0xA,
+            0xB,
+            // mctp transport header - 4 bytes
+            0b0000_0001, // mctp reserved, header version
+            192,         // destination endpoint id
+            236,         // source endpoint id
+            0b0011_0011, // som (0), eom (0), seq (3), tag owner (0), message tag (3)
+            // mctp body data - 4 bytes
+            0xD8,
+            0xE9,
+            0xFA,
+            0x0B,
+            0x1C,
+            0x2D,
+            // test trailer - 2 bytes
+            0xC,
+            0xD,
+        ];
+        assert_eq!(packet2, &expected[..]);
 
         // Third packet (final packet with 2 bytes of data)
         let packet3 = state.next().unwrap().unwrap();
-        assert_eq!(
-            packet3,
-            &[
-                // test header - 2 bytes
-                0xA,
-                0xB,
-                // mctp transport header - 4 bytes
-                0b0000_0001, // mctp reserved, header version
-                192,         // destination endpoint id
-                236,         // source endpoint id
-                0b0100_0011, // som (0), eom (1), seq (0), tag owner (0), message tag (3)
-                // mctp body data - 2 bytes
-                0x2D,
-                0x3E,
-                // test trailer - 2 bytes
-                0xC,
-                0xD,
-            ]
-        );
+        let expected: [u8; MTU_SIZE] = [
+            // test header - 2 bytes
+            0xA,
+            0xB,
+            // mctp transport header - 4 bytes
+            0b0000_0001, // mctp reserved, header version
+            192,         // destination endpoint id
+            236,         // source endpoint id
+            0b0100_0011, // som (0), eom (1), seq (0), tag owner (0), message tag (3)
+            // mctp body data - 1 bytes
+            0x3E,
+            // test trailer - 2 bytes
+            0xC,
+            0xD,
+            // remainder is not populated
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+        ];
+        assert_eq!(packet3, &expected[..9]);
 
         // Verify no more packets
         assert!(state.next().is_none(), "Expected exactly 3 packets");
@@ -531,7 +598,8 @@ mod tests {
             medium_context: (),
         };
 
-        let state_result = context.serialize_packet(reply_context, &[0xA5]);
+        let message = MctpMessageHeaderAndBody::vendor_defined_pci(0, 0x1234, &[0xA5]);
+        let state_result = context.serialize_packet(reply_context, message);
         assert!(state_result.is_ok());
 
         let mut state = state_result.unwrap();
@@ -558,8 +626,9 @@ mod tests {
             0b0000_1001, // destination endpoint id (9)
             0b0001_0110, // source endpoint id (22)
             0b1110_0011, // som (1), eom (1), seq (0), to, tag (3)
-            0b0000_0000, // message header
-            0b0000_0000,
+            0x7F,        // message header - 3 bytes (vendor defined pci)
+            0x12,        // pci vendor id - low byte
+            0x34,        // pci vendor id - high byte
             0b0000_0010,
             0b0000_0000,
         ];
