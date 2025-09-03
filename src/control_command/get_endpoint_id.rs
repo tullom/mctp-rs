@@ -64,7 +64,7 @@ impl ControlCommand for GetEndpointIdResponse {
         let mut tmp = [0; 4];
         tmp[1..4].copy_from_slice(buffer);
         let value = u32::from_be_bytes(tmp);
-        Ok(Self::try_from(value).map_err(|_| "Invalid value")?)
+        Self::try_from(value).map_err(|_| "Invalid value")
     }
 }
 

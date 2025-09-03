@@ -12,9 +12,9 @@ pub enum MctpCompletionCode {
     CommandSpecific(u8), // 0x80-0xFF are command specific
 }
 
-impl Into<u8> for MctpCompletionCode {
-    fn into(self) -> u8 {
-        match self {
+impl From<MctpCompletionCode> for u8 {
+    fn from(value: MctpCompletionCode) -> Self {
+        match value {
             MctpCompletionCode::Success => 0x00,
             MctpCompletionCode::Error => 0x01,
             MctpCompletionCode::ErrorInvalidData => 0x02,

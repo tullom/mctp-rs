@@ -61,7 +61,7 @@ impl MctpMedium for SmbusEspiMedium {
         let (header_slice, body) = buffer.split_at_mut(4);
 
         // Write the body first, but ensure we leave space for PEC
-        if body.len() == 0 {
+        if body.is_empty() {
             return Err(MediumOrGenericError::Medium("No space for PEC byte"));
         }
         let available_body_len = body.len() - 1; // Reserve 1 byte for PEC
@@ -73,7 +73,7 @@ impl MctpMedium for SmbusEspiMedium {
             destination_slave_address: reply_context.source_slave_address,
             source_slave_address: reply_context.destination_slave_address,
             byte_count: body_len as u8,
-            command_code: SmbusCommandCode::MCTP,
+            command_code: SmbusCommandCode::Mctp,
             ..Default::default()
         };
         let header_value =
@@ -82,7 +82,7 @@ impl MctpMedium for SmbusEspiMedium {
 
         // with the header written, compute the PEC byte
         let pec_value = smbus_pec::pec(&buffer[0..4 + body_len]);
-        buffer[4 + body_len] = pec_value as u8;
+        buffer[4 + body_len] = pec_value;
 
         // add 4 for frame header, add 1 for PEC byte
         Ok(&buffer[0..4 + body_len + 1])
@@ -100,7 +100,7 @@ impl MctpMedium for SmbusEspiMedium {
 )]
 enum SmbusCommandCode {
     #[default]
-    MCTP = 0x0F,
+    Mctp = 0x0F,
 }
 impl TryFromBits<u32> for SmbusCommandCode {
     fn try_from_bits(bits: u32) -> Result<Self, &'static str> {
@@ -172,7 +172,7 @@ mod tests {
         let header = SmbusEspiMediumHeader {
             destination_slave_address: 0x20,
             source_slave_address: 0x10,
-            command_code: SmbusCommandCode::MCTP,
+            command_code: SmbusCommandCode::Mctp,
             byte_count: 4,
             ..Default::default()
         };
@@ -195,7 +195,7 @@ mod tests {
 
         assert_eq!(frame.header.destination_slave_address, 0x20);
         assert_eq!(frame.header.source_slave_address, 0x10);
-        assert_eq!(frame.header.command_code, SmbusCommandCode::MCTP);
+        assert_eq!(frame.header.command_code, SmbusCommandCode::Mctp);
         assert_eq!(frame.header.byte_count, 4);
         assert_eq!(frame.pec, pec as u8);
         assert_eq!(body, &payload);
@@ -310,7 +310,7 @@ mod tests {
         // Note: destination and source are swapped in reply
         assert_eq!(header.destination_slave_address, 0x10); // reply_context.source
         assert_eq!(header.source_slave_address, 0x20); // reply_context.destination
-        assert_eq!(header.command_code, SmbusCommandCode::MCTP);
+        assert_eq!(header.command_code, SmbusCommandCode::Mctp);
         assert_eq!(header.byte_count, 4);
 
         // Verify payload
@@ -451,7 +451,7 @@ mod tests {
         assert_eq!(deserialized_payload, &original_payload);
         assert_eq!(frame.header.destination_slave_address, 0x24); // swapped
         assert_eq!(frame.header.source_slave_address, 0x42); // swapped
-        assert_eq!(frame.header.command_code, SmbusCommandCode::MCTP);
+        assert_eq!(frame.header.command_code, SmbusCommandCode::Mctp);
         assert_eq!(frame.header.byte_count, original_payload.len() as u8);
 
         // Verify PEC is correct
@@ -493,7 +493,7 @@ mod tests {
         // Test valid command code
         assert_eq!(
             SmbusCommandCode::try_from_bits(0x0F).unwrap(),
-            SmbusCommandCode::MCTP
+            SmbusCommandCode::Mctp
         );
 
         // Test out of range (> 0xFF)
@@ -509,7 +509,7 @@ mod tests {
         );
 
         // Test conversion to bits
-        assert_eq!(SmbusCommandCode::MCTP.try_into_bits().unwrap(), 0x0F);
+        assert_eq!(SmbusCommandCode::Mctp.try_into_bits().unwrap(), 0x0F);
     }
 
     #[test]
@@ -519,14 +519,14 @@ mod tests {
         assert_eq!(header.destination_slave_address, 0);
         assert_eq!(header.source_slave_address, 0);
         assert_eq!(header.byte_count, 0);
-        assert_eq!(header.command_code, SmbusCommandCode::MCTP); // default
+        assert_eq!(header.command_code, SmbusCommandCode::Mctp); // default
 
         // Test valid maximum values within bit ranges
         let header = SmbusEspiMediumHeader {
             destination_slave_address: 0x7F, // 7 bits max (bits 25-31)
             source_slave_address: 0x3F,      // 6 bits max (bits 1-7, bit 0 reserved)
             byte_count: 0xFF,                // 8 bits max (bits 8-15)
-            command_code: SmbusCommandCode::MCTP,
+            command_code: SmbusCommandCode::Mctp,
             ..Default::default()
         };
 
