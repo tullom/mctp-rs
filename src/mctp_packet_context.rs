@@ -1,5 +1,5 @@
 use crate::{
-    AssemblingState, AssemblyState, MctpMessage, MctpPacketError,
+    MctpMessage, MctpPacketError,
     deserialize::{parse_message_body, parse_transport_header},
     endpoint_id::EndpointId,
     error::{MctpPacketResult, ProtocolError},
@@ -171,4 +171,19 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
             assembly_buffer: self.packet_assembly_buffer,
         })
     }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum AssemblyState {
+    Idle,
+    Receiving(AssemblingState),
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+struct AssemblingState {
+    message_tag: MctpMessageTag,
+    tag_owner: u8,
+    source_endpoint_id: EndpointId,
+    packet_sequence_number: MctpSequenceNumber,
+    packet_assembly_buffer_index: usize,
 }

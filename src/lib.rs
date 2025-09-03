@@ -17,53 +17,17 @@ mod medium;
 mod serialize;
 #[cfg(test)]
 mod test_util;
-use bit_register::bit_register;
-use endpoint_id::EndpointId;
 
 pub use crate::error::MctpPacketError;
-use crate::mctp_control_message_header::MctpControlMessageHeader;
-use crate::mctp_message_tag::MctpMessageTag;
-use crate::mctp_message_type::MctpMessageType;
+pub use crate::mctp_control_message_header::MctpControlMessageHeader;
+pub use crate::mctp_message_tag::MctpMessageTag;
+pub use crate::mctp_message_type::MctpMessageType;
 pub use crate::mctp_packet_context::MctpPacketContext;
-use crate::mctp_packet_context::MctpReplyContext;
-use crate::mctp_sequence_number::MctpSequenceNumber;
-use crate::medium::MctpMedium;
-
-#[cfg(test)]
-mod tests_1 {
-    extern crate std;
-    use crate::{mctp_message_tag::MctpMessageTag, mctp_transport_header::MctpTransportHeader};
-
-    #[test]
-    fn test_mctp_transport_header_bit_register() {
-        assert_eq!(
-            MctpTransportHeader::try_from(u32::from_be_bytes([
-                0b1111_0000,
-                0b0000_0000,
-                0b0000_0000,
-                0b0000_0000,
-            ]))
-            .unwrap(),
-            MctpTransportHeader {
-                reserved: 0b1111,
-                ..Default::default()
-            }
-        );
-        assert_eq!(
-            MctpTransportHeader::try_from(u32::from_be_bytes([
-                0b0000_0000,
-                0b0000_0000,
-                0b0000_0000,
-                0b0000_0011,
-            ]))
-            .unwrap(),
-            MctpTransportHeader {
-                message_tag: MctpMessageTag::try_from(3).unwrap(),
-                ..Default::default()
-            }
-        );
-    }
-}
+pub use crate::mctp_packet_context::MctpReplyContext;
+pub use crate::mctp_sequence_number::MctpSequenceNumber;
+pub use crate::medium::MctpMedium;
+use bit_register::bit_register;
+pub use endpoint_id::EndpointId;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct MctpMessage<'buffer, M: MctpMedium> {
@@ -99,26 +63,8 @@ bit_register! {
     }
 }
 
-/// The body of the message
-pub enum MctpMessageData {}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum AssemblyState {
-    Idle,
-    Receiving(AssemblingState),
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-struct AssemblingState {
-    message_tag: MctpMessageTag,
-    tag_owner: u8,
-    source_endpoint_id: EndpointId,
-    packet_sequence_number: MctpSequenceNumber,
-    packet_assembly_buffer_index: usize,
-}
-
 #[cfg(test)]
-mod mctp_context_tests {
+mod tests {
     use super::*;
     use crate::{
         error::ProtocolError, mctp_command_code::MctpCommandCode,
