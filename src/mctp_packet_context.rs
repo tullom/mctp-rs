@@ -1,5 +1,5 @@
 use crate::{
-    MctpMessage, MctpMessageHeaderAndBody, MctpPacketError,
+    MctpMessage, MctpMessageHeaderTrait, MctpMessageTrait, MctpPacketError,
     deserialize::{parse_message_body, parse_transport_header},
     endpoint_id::EndpointId,
     error::{MctpPacketResult, ProtocolError},
@@ -139,7 +139,7 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
                     message_tag: transport_header.message_tag,
                     medium_context: medium_frame.reply_context(),
                 },
-                header_and_body: message_body,
+                message_buffer: message_body,
                 message_integrity_check,
             })
         } else {
@@ -150,11 +150,11 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
         Ok(message)
     }
 
-    pub fn serialize_packet<'source>(
+    pub fn serialize_packet<P: MctpMessageTrait<'buf>>(
         &'buf mut self,
         reply_context: MctpReplyContext<M>,
-        message: MctpMessageHeaderAndBody<'source>,
-    ) -> MctpPacketResult<SerializePacketState<'source, 'buf, M>, M> {
+        message: (P::Header, P),
+    ) -> MctpPacketResult<SerializePacketState<'buf, M>, M> {
         match self.assembly_state {
             AssemblyState::Idle => {}
             _ => {
@@ -164,14 +164,23 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
             }
         };
 
+        self.packet_assembly_buffer[0] = P::MESSAGE_TYPE;
+        let header_size = message.0.serialize(&mut self.packet_assembly_buffer[1..])?;
+        let body_size = message
+            .1
+            .serialize(&mut self.packet_assembly_buffer[header_size + 1..])?;
+
+        let (message, rest) = self
+            .packet_assembly_buffer
+            .split_at_mut(header_size + body_size + 1);
+
         Ok(SerializePacketState {
             medium: &self.medium,
             reply_context,
             current_packet_num: 0,
             serialized_message_header: false,
-            source_message_header: Some(message.header()),
-            source_message_body: message.body(),
-            assembly_buffer: self.packet_assembly_buffer,
+            message_buffer: message,
+            assembly_buffer: rest,
         })
     }
 }

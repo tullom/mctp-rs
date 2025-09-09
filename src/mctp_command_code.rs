@@ -4,7 +4,7 @@ use bit_register::{NumBytes, TryFromBits, TryIntoBits};
 #[derive(
     Copy, Clone, PartialEq, Eq, Debug, Default, num_enum::IntoPrimitive, num_enum::TryFromPrimitive,
 )]
-pub enum MctpCommandCode {
+pub enum MctpControlCommandCode {
     #[default]
     Reserved = 0x00,
     SetEndpointId = 0x01,
@@ -31,7 +31,7 @@ pub enum MctpCommandCode {
     // 0xF0-0xFF are transport specific commands
 }
 
-impl TryFromBits<u32> for MctpCommandCode {
+impl TryFromBits<u32> for MctpControlCommandCode {
     fn try_from_bits(bits: u32) -> Result<Self, &'static str> {
         if bits > 0xFF {
             return Err("Out of range value for MCTP command code");
@@ -42,12 +42,12 @@ impl TryFromBits<u32> for MctpCommandCode {
     }
 }
 
-impl TryIntoBits<u32> for MctpCommandCode {
+impl TryIntoBits<u32> for MctpControlCommandCode {
     fn try_into_bits(self) -> Result<u32, &'static str> {
         Ok(Into::<u8>::into(self) as u32)
     }
 }
 
-impl NumBytes for MctpCommandCode {
+impl NumBytes for MctpControlCommandCode {
     const NUM_BYTES: usize = 1;
 }

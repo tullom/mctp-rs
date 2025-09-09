@@ -1,11 +1,6 @@
 use crate::{
-    MctpControlMessageHeader, MctpMessageHeader, MctpMessageHeaderAndBody, MctpPacketError,
-    MctpVendorDefinedPciMessageHeader,
-    error::{MctpPacketResult, ProtocolError},
-    mctp_completion_code::MctpCompletionCode,
-    mctp_message_type::MctpMessageType,
-    mctp_transport_header::MctpTransportHeader,
-    medium::MctpMedium,
+    MctpMessageBuffer, MctpPacketError, error::MctpPacketResult,
+    mctp_transport_header::MctpTransportHeader, medium::MctpMedium,
 };
 
 pub(crate) fn parse_transport_header<M: MctpMedium>(
@@ -27,54 +22,26 @@ pub(crate) fn parse_transport_header<M: MctpMedium>(
 
 pub(crate) fn parse_message_body<M: MctpMedium>(
     packet: &[u8],
-) -> MctpPacketResult<(MctpMessageHeaderAndBody<'_>, Option<u8>), M> {
+) -> MctpPacketResult<(MctpMessageBuffer<'_>, Option<u8>), M> {
     // first four bytes are the message header, parse with MctpMessageHeader
     // to figure out the type, then based on that, parse the type specific header
-    if packet.len() < 4 {
+    if packet.is_empty() {
         return Err(MctpPacketError::HeaderParseError(
-            "packet < 4 bytes for message header",
+            "packet too small to extract message type from header",
         ));
     }
-    let header_u32 =
-        u32::from_be_bytes(packet[0..4].try_into().map_err(|_| {
-            MctpPacketError::HeaderParseError("packet < 4 bytes for message header")
-        })?);
-    let header =
-        MctpMessageHeader::try_from(header_u32).map_err(MctpPacketError::HeaderParseError)?;
-    let packet = &packet[4..];
 
-    let header_and_body = match header.message_type {
-        MctpMessageType::MctpControl => {
-            let header = MctpControlMessageHeader::try_from(header_u32)
-                .map_err(MctpPacketError::HeaderParseError)?;
-
-            // completion code is only present on reponse message
-            if header.request_bit == 1 && header.completion_code != MctpCompletionCode::Success {
-                return Err(MctpPacketError::ProtocolError(
-                    ProtocolError::CompletionCodeOnRequestMessage(header.completion_code),
-                ));
-            }
-
-            MctpMessageHeaderAndBody::Control {
-                header,
-                body: packet,
-            }
-        }
-        MctpMessageType::VendorDefinedIana => MctpMessageHeaderAndBody::VendorDefinedIana {
-            header,
-            body: packet,
-        },
-        MctpMessageType::VendorDefinedPci => {
-            let header = MctpVendorDefinedPciMessageHeader::try_from(header_u32)
-                .map_err(MctpPacketError::HeaderParseError)?;
-            MctpMessageHeaderAndBody::VendorDefinedPci {
-                header,
-                body: packet,
-            }
-        }
-        _ => return Err(MctpPacketError::HeaderParseError("Invalid message type")),
-    };
+    let integrity_check = packet[0] & 0b1000_0000;
+    let message_type = packet[0] & 0b0111_1111;
+    let packet = &packet[1..];
 
     // TODO - compute message integrity check if header.integrity_check is set
-    Ok((header_and_body, None))
+    Ok((
+        MctpMessageBuffer {
+            integrity_check,
+            message_type,
+            rest: packet,
+        },
+        None,
+    ))
 }
