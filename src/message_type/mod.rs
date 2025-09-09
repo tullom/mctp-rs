@@ -1,8 +1,12 @@
 mod mctp_control;
+#[cfg(feature = "odp")]
+mod odp;
 mod vendor_defined_pci;
 
 use crate::{MctpMedium, error::MctpPacketResult};
 pub use mctp_control::*;
+#[cfg(feature = "odp")]
+pub use odp::*;
 pub use vendor_defined_pci::*;
 
 pub trait MctpMessageHeaderTrait: Sized {

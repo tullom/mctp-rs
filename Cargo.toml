@@ -6,6 +6,7 @@ edition = "2024"
 [features]
 default = []
 espi = ["dep:espi-device"]
+odp = []
 
 [dependencies]
 espi-device = { git = "https://github.com/OpenDevicePartnership/haf-ec-service", optional = true }
