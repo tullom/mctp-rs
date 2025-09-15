@@ -92,6 +92,10 @@ pub enum MctpMessageHeaderAndBody<'buffer> {
         header: MctpMessageHeaderBitRegister,
         body: &'buffer [u8],
     },
+    Odp {
+        header: MctpControlMessageHeaderBitRegister,
+        body: &'buffer [u8],
+    },
 }
 
 bit_register! {
@@ -250,7 +254,7 @@ impl<'source, 'assembly, M: MctpMedium> SerializePacketState<'source, 'assembly,
                         // TODO: Make this generic across any message type, not just MCTP control
                         let control_header = MctpControlMessageHeaderBitRegister {
                             integrity_check: 0,
-                            message_type: MctpMessageType::MctpControl,
+                            message_type: MctpMessageType::Odp,
                             request_bit: 0,
                             datagram_bit: 1,
                             instance_id: 1,
@@ -258,8 +262,10 @@ impl<'source, 'assembly, M: MctpMedium> SerializePacketState<'source, 'assembly,
                             completion_code: MctpCompletionCode::Success,
                             ..Default::default()
                         };
-    
-                        let control_header_value: u32 = control_header.try_into().map_err(MctpPacketError::SerializeError)?;
+
+                        let control_header_value: u32 = control_header
+                            .try_into()
+                            .map_err(MctpPacketError::SerializeError)?;
                         // MCTP Control
                         buffer[4..8].copy_from_slice(&control_header_value.to_be_bytes());
                         // message body is the rest of the buffer, up to the packet size
@@ -270,8 +276,6 @@ impl<'source, 'assembly, M: MctpMedium> SerializePacketState<'source, 'assembly,
                         buffer[4..4 + body_size].copy_from_slice(body);
                         Ok(4 + body_size)
                     }
-
-
                 },
             )
             .map_err(Into::<MctpPacketError<M::Error>>::into);
@@ -462,6 +466,22 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
                 header,
                 body: packet,
             },
+            MctpMessageType::Odp => {
+                let header = MctpControlMessageHeaderBitRegister::try_from(header_u32)
+                    .map_err(MctpPacketError::HeaderParseError)?;
+
+                // completion code is only present on reponse message
+                if header.request_bit == 1 && header.completion_code != MctpCompletionCode::Success
+                {
+                    return Err(MctpPacketError::ProtocolError(
+                        ProtocolError::CompletionCodeOnRequestMessage(header.completion_code),
+                    ));
+                }
+                MctpMessageHeaderAndBody::Odp {
+                    header,
+                    body: packet,
+                }
+            }
             _ => return Err(MctpPacketError::HeaderParseError("Invalid message type")),
         };
 
@@ -844,48 +864,26 @@ mod mctp_context_tests {
             }, // Medium-specific context
         };
 
-        let mut state = context.serialize_packet(reply_context, &[0,0,0,1,0,0,1,0,0,1,0,0,1,0,0,0]).unwrap();
+        let mut state = context
+            .serialize_packet(
+                reply_context,
+                &[0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+            )
+            .unwrap();
 
         let packet = state.next().unwrap().unwrap();
         assert_eq!(
             packet,
             &[
                 // mctp transport header
-                0, // mctp reserved, header version
-                15,         // destination endpoint id
-                25,         // source endpoint id
-                2, // som (1), eom (1), seq (2), tag owner (0), message tag (3)
+                0,  // mctp reserved, header version
+                15, // destination endpoint id
+                25, // source endpoint id
+                2,  // som (1), eom (1), seq (2), tag owner (0), message tag (3)
                 // mctp body data - 1 byte
-                1,
-                0x80,
-                8,
-                211,
-                // test trailer - 2 bytes
-                0,
-                65,
-                0,
-                0,
-
-                0,
-                0,
-                0,
-                1,
-                
-                0,
-                0,
-                1,
-                0,
-                
-                0,
-                1,
-                0,
-                0,
-                
-                1,
-                0,
-                0,
-                0,
-                ]
+                1, 0x80, 8, 211, // test trailer - 2 bytes
+                0, 65, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0,
+            ]
         );
     }
 
