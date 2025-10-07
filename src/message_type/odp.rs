@@ -134,7 +134,6 @@ fn check_header_length<M: MctpMedium>(buffer: &[u8]) -> MctpPacketResult<(), M> 
 mod tests {
     use super::*;
     use crate::test_util::TestMedium;
-    use rstest;
 
     #[rstest::rstest]
     #[case(OdpHeader {

@@ -143,7 +143,6 @@ mod tests {
     use super::*;
     use crate::error::ProtocolError;
     use crate::test_util::TestMedium;
-    use rstest;
 
     #[test]
     fn header_serialize_deserialize_happy_path() {
