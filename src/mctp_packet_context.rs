@@ -21,7 +21,8 @@ pub struct MctpReplyContext<M: MctpMedium> {
     pub medium_context: M::ReplyContext,
 }
 
-/// Context for serializing and deserializing an MCTP message, which may be split among multiple packets.
+/// Context for serializing and deserializing an MCTP message, which may be split among multiple
+/// packets.
 pub struct MctpPacketContext<'buf, M: MctpMedium> {
     assembly_state: AssemblyState,
     medium: M,
