@@ -292,9 +292,11 @@ pub enum Odp<
     },
     BatteryGetBctRequest {
         battery_id: u8,
+        bct: embedded_batteries::acpi::Bct,
     },
     BatteryGetBtmRequest {
         battery_id: u8,
+        btm: embedded_batteries::acpi::Btm,
     },
     BatterySetBmsRequest {
         battery_id: u8,
@@ -332,13 +334,17 @@ pub enum Odp<
         bmd: embedded_batteries::acpi::Bmd,
     },
     BatteryGetBctResponse {
-        bct: embedded_batteries::acpi::Bct,
+        bct_response: embedded_batteries::acpi::BctReturnResult,
     },
     BatteryGetBtmResponse {
-        btm: embedded_batteries::acpi::Btm,
+        btm_response: embedded_batteries::acpi::BtmReturnResult,
     },
-    BatterySetBmsResponse {},
-    BatterySetBmaResponse {},
+    BatterySetBmsResponse {
+        status: Dword,
+    },
+    BatterySetBmaResponse {
+        status: Dword,
+    },
     BatteryGetStaResponse {
         sta: embedded_batteries::acpi::StaReturn,
     },
@@ -503,8 +509,18 @@ impl<
                 Ok(5)
             }
             Self::BatteryGetBmdRequest { battery_id } => write_to_buffer(buffer, [battery_id]),
-            Self::BatteryGetBctRequest { battery_id } => write_to_buffer(buffer, [battery_id]),
-            Self::BatteryGetBtmRequest { battery_id } => write_to_buffer(buffer, [battery_id]),
+            Self::BatteryGetBctRequest { battery_id, bct } => {
+                buffer[0] = battery_id;
+                buffer[1..5].copy_from_slice(&u32::to_le_bytes(bct.charge_level_percent));
+
+                Ok(5)
+            }
+            Self::BatteryGetBtmRequest { battery_id, btm } => {
+                buffer[0] = battery_id;
+                buffer[1..5].copy_from_slice(&u32::to_le_bytes(btm.discharge_rate));
+
+                Ok(5)
+            }
             Self::BatterySetBmsRequest { battery_id, bms } => {
                 buffer[0] = battery_id;
                 buffer[1..5].copy_from_slice(&u32::to_le_bytes(bms.sampling_time_ms));
@@ -626,18 +642,26 @@ impl<
 
                 Ok(BMD_RETURN_SIZE_BYTES)
             }
-            Self::BatteryGetBctResponse { bct } => {
-                buffer[..4].copy_from_slice(&u32::to_le_bytes(bct.charge_level_percent));
+            Self::BatteryGetBctResponse { bct_response } => {
+                buffer[..4].copy_from_slice(&u32::to_le_bytes(bct_response.into()));
 
                 Ok(BCT_RETURN_SIZE_BYTES)
             }
-            Self::BatteryGetBtmResponse { btm } => {
-                buffer[..4].copy_from_slice(&u32::to_le_bytes(btm.discharge_rate));
+            Self::BatteryGetBtmResponse { btm_response } => {
+                buffer[..4].copy_from_slice(&u32::to_le_bytes(btm_response.into()));
 
                 Ok(BTM_RETURN_SIZE_BYTES)
             }
-            Self::BatterySetBmsResponse {} => Ok(0),
-            Self::BatterySetBmaResponse {} => Ok(0),
+            Self::BatterySetBmsResponse { status } => {
+                buffer[..4].copy_from_slice(&u32::to_le_bytes(status));
+
+                Ok(4)
+            }
+            Self::BatterySetBmaResponse { status } => {
+                buffer[..4].copy_from_slice(&u32::to_le_bytes(status));
+
+                Ok(4)
+            }
             Self::BatteryGetStaResponse { sta } => {
                 buffer[..4].copy_from_slice(&u32::to_le_bytes(sta.bits()));
 
@@ -750,9 +774,15 @@ impl<
             },
             OdpCommandCode::BatteryGetBctRequest => Self::BatteryGetBctRequest {
                 battery_id: safe_get_u8(buffer, 0)?,
+                bct: embedded_batteries::acpi::Bct {
+                    charge_level_percent: safe_get_dword(buffer, 1)?,
+                },
             },
             OdpCommandCode::BatteryGetBtmRequest => Self::BatteryGetBtmRequest {
                 battery_id: safe_get_u8(buffer, 0)?,
+                btm: embedded_batteries::acpi::Btm {
+                    discharge_rate: safe_get_dword(buffer, 1)?,
+                },
             },
             OdpCommandCode::BatterySetBmsRequest => Self::BatterySetBmsRequest {
                 battery_id: safe_get_u8(buffer, 0)?,
@@ -930,17 +960,21 @@ impl<
                 },
             },
             OdpCommandCode::BatteryGetBctResponse => Self::BatteryGetBctResponse {
-                bct: embedded_batteries::acpi::Bct {
-                    charge_level_percent: safe_get_dword(buffer, 0)?,
-                },
+                bct_response: embedded_batteries::acpi::BctReturnResult::from(safe_get_dword(
+                    buffer, 0,
+                )?),
             },
             OdpCommandCode::BatteryGetBtmResponse => Self::BatteryGetBtmResponse {
-                btm: embedded_batteries::acpi::Btm {
-                    discharge_rate: safe_get_dword(buffer, 0)?,
-                },
+                btm_response: embedded_batteries::acpi::BtmReturnResult::from(safe_get_dword(
+                    buffer, 0,
+                )?),
             },
-            OdpCommandCode::BatterySetBmsResponse => Self::BatterySetBmsResponse {},
-            OdpCommandCode::BatterySetBmaResponse => Self::BatterySetBmaResponse {},
+            OdpCommandCode::BatterySetBmsResponse => Self::BatterySetBmsResponse {
+                status: safe_get_dword(buffer, 0)?,
+            },
+            OdpCommandCode::BatterySetBmaResponse => Self::BatterySetBmaResponse {
+                status: safe_get_dword(buffer, 0)?,
+            },
             OdpCommandCode::BatteryGetStaResponse => Self::BatteryGetStaResponse {
                 sta: embedded_batteries::acpi::StaReturn::from_bits_retain(safe_get_dword(
                     buffer, 0,
