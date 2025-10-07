@@ -1,7 +1,6 @@
 # mctp-rs
 
 A `no_std` Rust implementation of the Management Component Transport Protocol (MCTP) as defined in the [DMTF DSP0236 specification](https://www.dmtf.org/sites/default/files/standards/documents/DSP0236_1.3.3.pdf).
-[docs](https://dymk.github.io/mctp-rs/)
 
 ## Overview
 
@@ -14,7 +13,7 @@ MCTP is a communication protocol designed for platform management subsystems in 
 ## Features
 
 - `espi` - Enables eSPI device support via the `espi-device` crate
-
+- `odp` - Enables ODP specific message types - [docs](https://dymk.github.io/mctp-rs/mctp_rs/message_type/odp)
 
 ## Documentation & Usage
 
