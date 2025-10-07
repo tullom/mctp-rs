@@ -1,6 +1,7 @@
 use bit_register::{NumBytes, TryFromBits, TryIntoBits};
 
 #[derive(Debug, Default, PartialEq, Eq, Copy, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MctpMessageTag(u8);
 
 impl TryFrom<u8> for MctpMessageTag {

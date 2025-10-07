@@ -13,6 +13,7 @@ use crate::{
 /// the MCTP transport source/destination, the sequence number to use for
 /// the reply, and the medium-specific context that came with the request.
 #[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MctpReplyContext<M: MctpMedium> {
     pub destination_endpoint_id: EndpointId,
     pub source_endpoint_id: EndpointId,
@@ -187,12 +188,14 @@ impl<'buf, M: MctpMedium> MctpPacketContext<'buf, M> {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 enum AssemblyState {
     Idle,
     Receiving(AssemblingState),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 struct AssemblingState {
     message_tag: MctpMessageTag,
     tag_owner: u8,

@@ -7,9 +7,11 @@ use crate::{
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SmbusEspiMedium;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SmbusEspiReplyContext {
     pub destination_slave_address: u8,
     pub source_slave_address: u8,
@@ -106,6 +108,7 @@ impl MctpMedium for SmbusEspiMedium {
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, num_enum::IntoPrimitive, num_enum::TryFromPrimitive, Default,
 )]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 enum SmbusCommandCode {
     #[default]
     Mctp = 0x0F,
@@ -130,6 +133,7 @@ impl NumBytes for SmbusCommandCode {
 
 bit_register! {
     #[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     struct SmbusEspiMediumHeader: little_endian u32 {
         pub destination_slave_address: u8 => [25:31],
         pub _reserved1: Zero => [24],
@@ -141,6 +145,7 @@ bit_register! {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SmbusEspiMediumFrame {
     header: SmbusEspiMediumHeader,
     pec: u8,

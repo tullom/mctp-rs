@@ -176,6 +176,7 @@ pub use medium::*;
 pub use message_type::*;
 
 #[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MctpMessage<'buffer, M: MctpMedium> {
     pub reply_context: MctpReplyContext<M>,
     pub message_buffer: MctpMessageBuffer<'buffer>,
@@ -183,6 +184,7 @@ pub struct MctpMessage<'buffer, M: MctpMedium> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MctpMessageBuffer<'buffer> {
     integrity_check: u8,
     message_type: u8,

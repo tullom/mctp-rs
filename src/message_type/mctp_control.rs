@@ -7,6 +7,7 @@ use crate::{
 };
 
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MctpControlHeader {
     pub request_bit: bool,  // bit 7
     pub datagram_bit: bool, // bit 6
@@ -16,6 +17,7 @@ pub struct MctpControlHeader {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MctpControl {
     SetEndpointIdRequest([u8; 2]),
     SetEndpointIdResponse([u8; 3]),

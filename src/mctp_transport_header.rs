@@ -7,6 +7,7 @@ use crate::{
 
 bit_register! {
     #[derive(Debug, Default, PartialEq, Eq, Copy, Clone)]
+    #[cfg_attr(feature = "defmt", derive(defmt::Format))]
     pub struct MctpTransportHeader: little_endian u32 {
         pub reserved: u8 => [28:31],
         pub header_version: u8 => [24:27],

@@ -4,6 +4,7 @@ use crate::{
 };
 
 #[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SerializePacketState<'buf, M: MctpMedium> {
     pub(crate) medium: &'buf M,
     pub(crate) reply_context: MctpReplyContext<M>,

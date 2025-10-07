@@ -12,6 +12,7 @@ use crate::{
 
 // 5 bits total
 #[derive(num_enum::IntoPrimitive, num_enum::TryFromPrimitive, Debug, PartialEq, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum OdpService {
     Battery = 0x01,
@@ -22,6 +23,7 @@ pub enum OdpService {
 // 10 bits total
 // TODO: Fully define offsets for subsystem, temporarily it is every 32 entries
 #[derive(num_enum::IntoPrimitive, num_enum::TryFromPrimitive, Debug, PartialEq, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u16)]
 pub enum OdpCommandCode {
     BatteryGetBixRequest = 0x01,
@@ -72,6 +74,7 @@ pub enum OdpCommandCode {
 
 // 3 byte header
 #[derive(Debug, PartialEq, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct OdpHeader {
     pub request_bit: bool,                   // [23:23] (1 bit)
     pub datagram_bit: bool,                  // [22:22] (1 bit)
@@ -81,6 +84,7 @@ pub struct OdpHeader {
 }
 
 #[derive(PartialEq, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct BixFixedStrings<
     const MODEL_SIZE: usize,
     const SERIAL_SIZE: usize,
@@ -132,6 +136,7 @@ pub struct BixFixedStrings<
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 /// Error type when serializing ODP return types with fixed size strings.
 pub enum OdpSerializeErr {
     /// Input slice is too small to encapsulate all the fields.
@@ -186,6 +191,7 @@ impl<
 }
 
 #[derive(PartialEq, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct PifFixedStrings<const MODEL_SIZE: usize, const SERIAL_SIZE: usize, const OEM_SIZE: usize>
 {
     /// Bitfield describing the state and characteristics of the power source.
@@ -247,6 +253,7 @@ pub type Milliseconds = Dword;
 pub type DeciKelvin = Dword;
 
 #[derive(PartialEq, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Odp<
     const BIX_MODEL_SIZE: usize,
     const BIX_SERIAL_SIZE: usize,

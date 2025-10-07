@@ -4,6 +4,7 @@ use crate::{
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ProtocolError {
     #[error("Expected start of message")]
     ExpectedStartOfMessage,
@@ -26,6 +27,7 @@ pub enum ProtocolError {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MctpPacketError<M: MctpMedium> {
     HeaderParseError(&'static str),
     CommandParseError(&'static str),
