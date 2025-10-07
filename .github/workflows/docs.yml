@@ -1,0 +1,62 @@
+name: Docs
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build docs
+        run: cargo doc --workspace --all-features --no-deps
+
+      - name: Prepare docs for Pages
+        run: |
+          mkdir -p public
+          cp -r target/doc/* public/
+          # Create a root index redirect to the crate docs folder
+          cat > public/index.html <<'HTML'
+          <!doctype html>
+          <html>
+            <head>
+              <meta http-equiv="refresh" content="0; url=mctp_rs/index.html">
+              <meta name="robots" content="noindex">
+            </head>
+            <body>
+              <p>Redirecting to <a href="mctp_rs/index.html">crate docs</a>...</p>
+            </body>
+          </html>
+          HTML
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+
