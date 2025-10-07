@@ -1,6 +1,7 @@
 use bit_register::{NumBytes, TryFromBits, TryIntoBits};
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MctpSequenceNumber(u8);
 
 impl MctpSequenceNumber {

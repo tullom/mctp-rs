@@ -1,6 +1,7 @@
 use bit_register::{NumBytes, TryFromBits, TryIntoBits};
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MctpCompletionCode {
     #[default]
     Success,

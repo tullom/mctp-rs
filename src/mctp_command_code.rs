@@ -4,6 +4,7 @@ use bit_register::{NumBytes, TryFromBits, TryIntoBits};
 #[derive(
     Copy, Clone, PartialEq, Eq, Debug, Default, num_enum::IntoPrimitive, num_enum::TryFromPrimitive,
 )]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum MctpControlCommandCode {
     #[default]
     Reserved = 0x00,
