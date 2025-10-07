@@ -1,33 +1,179 @@
 #![no_std]
 #![allow(dead_code)]
 // extern crate std;
+//! # mctp-rs
+//!
+//! A `no_std` Rust implementation of the [DMTF Management Component Transport Protocol (MCTP)](https://www.dmtf.org/sites/default/files/standards/documents/DSP0236_1.3.3.pdf)
+//! transport.
+//!
+//! ## Receiving and parsing messages
+//!
+//! Use `MctpPacketContext` with your medium to assemble messages from packets.
+//!
+//! ```rust,no_run
+//! # use mctp_rs::*;
+//! # #[derive(Debug, Clone, Copy)] struct MyMedium { mtu: usize }
+//! # #[derive(Debug, Clone, Copy)] struct MyMediumFrame { packet_size: usize }
+//! # impl MctpMedium for MyMedium { type Frame=MyMediumFrame; type Error=&'static str; type ReplyContext=();
+//! #   fn max_message_body_size(&self)->usize{self.mtu}
+//! #   fn deserialize<'b>(&self,p:&'b [u8])->MctpPacketResult<(Self::Frame,&'b [u8]),Self>{Ok((MyMediumFrame{packet_size:p.len()},p))}
+//! #   fn serialize<'b,F>(&self,_:Self::ReplyContext,b:&'b mut [u8],w:F)->MctpPacketResult<&'b [u8],Self> where F: for<'a> FnOnce(&'a mut [u8])->MctpPacketResult<usize,Self>{let n=w(b)?;Ok(&b[..n])}}
+//! # impl MctpMediumFrame<MyMedium> for MyMediumFrame { fn packet_size(&self)->usize{self.packet_size} fn reply_context(&self)->(){()}}
+//! let mut assembly_buffer = [0u8; 1024];
+//! let medium = MyMedium { mtu: 256 };
+//! let mut context = MctpPacketContext::new(medium, &mut assembly_buffer);
+//!
+//! // Typically obtained from your bus
+//! let raw_packet_data: &[u8] = &[0x01, 0x02, 0x03, 0x83];
+//!
+//! match context.deserialize_packet(raw_packet_data) {
+//!     Ok(Some(message)) => {
+//!         // We received a complete MCTP message
+//!         if let Ok((header, control)) = message.parse_as::<MctpControl>() {
+//!             match control {
+//!                 MctpControl::GetEndpointIdRequest => {
+//!                     // Handle control request
+//!                     let _instance = header.instance_id;
+//!                 }
+//!                 MctpControl::GetEndpointIdResponse(bytes3) => {
+//!                     // Use response payload (3 bytes as per spec)
+//!                     let _eid = bytes3[0];
+//!                 }
+//!                 _ => {}
+//!             }
+//!         }
+//!     }
+//!     Ok(None) => { /* partial message; wait for more packets */ }
+//!     Err(e) => {
+//!         // handle protocol/medium error
+//!         let _ = e;
+//!     }
+//! }
+//! ```
+//! ## Sending messages
+//!
+//! Construct a header + body pair implementing `MctpMessageTrait` and serialize to one or
+//! more packets using `serialize_packet`.
+//!
+//! ```rust,no_run
+//! # use mctp_rs::*;
+//! # #[derive(Debug, Clone, Copy)] struct MyMedium { mtu: usize }
+//! # #[derive(Debug, Clone, Copy)] struct MyMediumFrame { packet_size: usize }
+//! # impl MctpMedium for MyMedium { type Frame=MyMediumFrame; type Error=&'static str; type ReplyContext=(); fn max_message_body_size(&self)->usize{self.mtu}
+//! #   fn deserialize<'b>(&self,p:&'b [u8])->MctpPacketResult<(Self::Frame,&'b [u8]),Self>{Ok((MyMediumFrame{packet_size:p.len()},p))}
+//! #   fn serialize<'b,F>(&self,_:Self::ReplyContext,b:&'b mut [u8],w:F)->MctpPacketResult<&'b [u8],Self> where F: for<'a> FnOnce(&'a mut [u8])->MctpPacketResult<usize,Self>{let n=w(b)?;Ok(&b[..n])}}
+//! # impl MctpMediumFrame<MyMedium> for MyMediumFrame { fn packet_size(&self)->usize{self.packet_size} fn reply_context(&self)->(){()}}
+//! let mut buf = [0u8; 1024];
+//! let mut ctx = MctpPacketContext::new(MyMedium { mtu: 64 }, &mut buf);
+//!
+//! let reply = MctpReplyContext {
+//!     destination_endpoint_id: EndpointId::try_from(0x20).unwrap(),
+//!     source_endpoint_id: EndpointId::try_from(0x21).unwrap(),
+//!     packet_sequence_number: MctpSequenceNumber::new(0),
+//!     message_tag: MctpMessageTag::try_from(1).unwrap(),
+//!     medium_context: (),
+//! };
+//!
+//! let message = (
+//!     VendorDefinedPciHeader(0x1234),
+//!     VendorDefinedPci(&[0xDE, 0xAD, 0xBE, 0xEF]),
+//! );
+//!
+//! let mut packets = ctx.serialize_packet(reply, message).unwrap();
+//! while let Some(packet_result) = packets.next() {
+//!     let packet_bytes = packet_result.unwrap();
+//!     // send `packet_bytes` via your bus
+//!     let _ = packet_bytes;
+//! }
+//! ```
+//!
+//! ## Implementing a custom medium
+//!
+//! The crate is transport-agnostic via the `MctpMedium` trait. Implement it for your bus
+//! (e.g., SMBus, eSPI) and provide a frame type implementing `MctpMediumFrame`.
+//!
+//! ```rust,no_run
+//! use mctp_rs::*;
+//!
+//! #[derive(Debug, Clone, Copy)]
+//! struct MyMedium {
+//!     mtu: usize,
+//! }
+//!
+//! #[derive(Debug, Clone, Copy)]
+//! struct MyMediumFrame {
+//!     packet_size: usize,
+//! }
+//!
+//! impl MctpMedium for MyMedium {
+//!     type Frame = MyMediumFrame;
+//!     type Error = &'static str;
+//!     type ReplyContext = ();
+//!
+//!     fn max_message_body_size(&self) -> usize {
+//!         self.mtu
+//!     }
+//!
+//!     fn deserialize<'buf>(
+//!         &self,
+//!         packet: &'buf [u8],
+//!     ) -> MctpPacketResult<(Self::Frame, &'buf [u8]), Self> {
+//!         // Strip/validate transport headers as needed for your bus and return MCTP payload slice
+//!         Ok((
+//!             MyMediumFrame {
+//!                 packet_size: packet.len(),
+//!             },
+//!             packet,
+//!         ))
+//!     }
+//!
+//!     fn serialize<'buf, F>(
+//!         &self,
+//!         _reply_context: Self::ReplyContext,
+//!         buffer: &'buf mut [u8],
+//!         message_writer: F,
+//!     ) -> MctpPacketResult<&'buf [u8], Self>
+//!     where
+//!         F: for<'a> FnOnce(&'a mut [u8]) -> MctpPacketResult<usize, Self>,
+//!     {
+//!         // Prepend transport headers as needed, then ask the writer to write MCTP payload
+//!         let message_len = message_writer(buffer)?;
+//!         Ok(&buffer[..message_len])
+//!     }
+//! }
+//!
+//! impl MctpMediumFrame<MyMedium> for MyMediumFrame {
+//!     fn packet_size(&self) -> usize {
+//!         self.packet_size
+//!     }
+//!     fn reply_context(&self) -> <MyMedium as MctpMedium>::ReplyContext {
+//!         ()
+//!     }
+//! }
+//! ```
 
 mod deserialize;
-pub mod endpoint_id;
+mod endpoint_id;
 mod error;
 mod mctp_command_code;
 mod mctp_completion_code;
 mod mctp_message_tag;
 mod mctp_packet_context;
-pub mod mctp_sequence_number;
+mod mctp_sequence_number;
 mod mctp_transport_header;
-pub mod medium;
-pub mod message_type;
+mod medium;
+mod message_type;
 mod serialize;
 #[cfg(test)]
 mod test_util;
 
 pub use endpoint_id::EndpointId;
+pub use error::{MctpPacketError, MctpPacketResult};
+pub use mctp_message_tag::MctpMessageTag;
+pub use mctp_packet_context::{MctpPacketContext, MctpReplyContext};
+pub use mctp_sequence_number::MctpSequenceNumber;
+pub use medium::*;
 pub use message_type::*;
-
-use crate::error::MctpPacketResult;
-pub use crate::{
-    error::MctpPacketError,
-    mctp_message_tag::MctpMessageTag,
-    mctp_packet_context::{MctpPacketContext, MctpReplyContext},
-    mctp_sequence_number::MctpSequenceNumber,
-    medium::MctpMedium,
-};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct MctpMessage<'buffer, M: MctpMedium> {
