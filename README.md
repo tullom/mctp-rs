@@ -2,6 +2,10 @@
 
 A `no_std` Rust implementation of the Management Component Transport Protocol (MCTP) as defined in the [DMTF DSP0236 specification](https://www.dmtf.org/sites/default/files/standards/documents/DSP0236_1.3.3.pdf).
 
+## Documentation
+
+Latest API docs: [https://dymk.github.io/mctp-rs/](https://dymk.github.io/mctp-rs/) (redirects to crate docs).
+
 ## Overview
 
 MCTP is a communication protocol designed for platform management subsystems in computer systems. It facilitates communication between management controllers (like BMCs) and managed devices across various bus types. This library provides:
