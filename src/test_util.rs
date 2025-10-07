@@ -96,7 +96,5 @@ impl MctpMediumFrame<TestMedium> for TestMediumFrame {
     fn packet_size(&self) -> usize {
         self.0
     }
-    fn reply_context(&self) -> <TestMedium as MctpMedium>::ReplyContext {
-        ()
-    }
+    fn reply_context(&self) -> <TestMedium as MctpMedium>::ReplyContext {}
 }

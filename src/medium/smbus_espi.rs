@@ -194,7 +194,7 @@ mod tests {
         let mut packet = [0u8; 9];
         packet[0..4].copy_from_slice(&header_bytes);
         packet[4..8].copy_from_slice(&payload);
-        packet[8] = pec as u8;
+        packet[8] = pec;
 
         let result = medium.deserialize(&packet).unwrap();
         let (frame, body) = result;
@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(frame.header.source_slave_address, 0x10);
         assert_eq!(frame.header.command_code, SmbusCommandCode::Mctp);
         assert_eq!(frame.header.byte_count, 4);
-        assert_eq!(frame.pec, pec as u8);
+        assert_eq!(frame.pec, pec);
         assert_eq!(body, &payload);
     }
 
@@ -290,13 +290,13 @@ mod tests {
 
         let mut packet = [0u8; 5];
         packet[0..4].copy_from_slice(&header_bytes);
-        packet[4] = pec as u8;
+        packet[4] = pec;
 
         let result = medium.deserialize(&packet).unwrap();
         let (frame, body) = result;
 
         assert_eq!(frame.header.byte_count, 0);
-        assert_eq!(frame.pec, pec as u8);
+        assert_eq!(frame.pec, pec);
         assert_eq!(body.len(), 0);
     }
 
@@ -337,7 +337,7 @@ mod tests {
 
         // Verify PEC byte
         let expected_pec = smbus_pec::pec(&result[0..8]);
-        assert_eq!(result[8], expected_pec as u8);
+        assert_eq!(result[8], expected_pec);
     }
 
     #[test]
@@ -387,7 +387,7 @@ mod tests {
 
         // Verify PEC
         let expected_pec = smbus_pec::pec(&result[0..4]);
-        assert_eq!(result[4], expected_pec as u8);
+        assert_eq!(result[4], expected_pec);
     }
 
     #[test]
@@ -422,7 +422,7 @@ mod tests {
 
         // Verify PEC
         let expected_pec = smbus_pec::pec(&result[0..259]);
-        assert_eq!(result[259], expected_pec as u8);
+        assert_eq!(result[259], expected_pec);
     }
 
     #[test]
@@ -473,7 +473,7 @@ mod tests {
 
         // Verify PEC is correct
         let expected_pec = smbus_pec::pec(&serialized[0..serialized.len() - 1]);
-        assert_eq!(frame.pec, expected_pec as u8);
+        assert_eq!(frame.pec, expected_pec);
     }
 
     #[test]
@@ -577,7 +577,7 @@ mod tests {
         let expected_pec = smbus_pec::pec(data_for_pec);
         let actual_pec = result[result.len() - 1];
 
-        assert_eq!(actual_pec, expected_pec as u8);
+        assert_eq!(actual_pec, expected_pec);
     }
 
     #[test]
@@ -609,7 +609,7 @@ mod tests {
 
         // Verify PEC
         let expected_pec = smbus_pec::pec(&result[0..4]);
-        assert_eq!(result[4], expected_pec as u8);
+        assert_eq!(result[4], expected_pec);
     }
 
     #[test]
@@ -673,7 +673,7 @@ mod tests {
             let mut packet = [0u8; 260]; // 4 + 255 + 1
             packet[0..4].copy_from_slice(&header_bytes);
             packet[4..4 + byte_count as usize].copy_from_slice(payload_slice);
-            packet[4 + byte_count as usize] = pec as u8;
+            packet[4 + byte_count as usize] = pec;
 
             let packet_slice = &packet[0..4 + byte_count as usize + 1];
             let result = medium.deserialize(packet_slice).unwrap();
@@ -681,7 +681,7 @@ mod tests {
 
             assert_eq!(frame.header.byte_count, byte_count);
             assert_eq!(body.len(), byte_count as usize);
-            assert_eq!(frame.pec, pec as u8);
+            assert_eq!(frame.pec, pec);
         }
     }
 
