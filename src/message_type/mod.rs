@@ -3,9 +3,10 @@ mod mctp_control;
 pub mod odp;
 mod vendor_defined_pci;
 
-use crate::{MctpMedium, error::MctpPacketResult};
 pub use mctp_control::*;
 pub use vendor_defined_pci::*;
+
+use crate::{MctpMedium, error::MctpPacketResult};
 
 pub trait MctpMessageHeaderTrait: Sized {
     fn serialize<M: MctpMedium>(self, buffer: &mut [u8]) -> MctpPacketResult<usize, M>;

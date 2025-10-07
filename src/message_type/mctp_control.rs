@@ -1,9 +1,10 @@
-use crate::MctpPacketError::{self, HeaderParseError};
-use crate::error::{MctpPacketResult, ProtocolError};
-use crate::{MctpMedium, MctpMessageHeaderTrait, MctpMessageTrait};
-
-use crate::mctp_command_code::MctpControlCommandCode;
-use crate::mctp_completion_code::MctpCompletionCode;
+use crate::{
+    MctpMedium, MctpMessageHeaderTrait, MctpMessageTrait,
+    MctpPacketError::{self, HeaderParseError},
+    error::{MctpPacketResult, ProtocolError},
+    mctp_command_code::MctpControlCommandCode,
+    mctp_completion_code::MctpCompletionCode,
+};
 
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct MctpControlHeader {
@@ -141,8 +142,7 @@ fn try_into_array<const N: usize, M: MctpMedium>(buffer: &[u8]) -> MctpPacketRes
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::ProtocolError;
-    use crate::test_util::TestMedium;
+    use crate::{error::ProtocolError, test_util::TestMedium};
 
     #[test]
     fn header_serialize_deserialize_happy_path() {

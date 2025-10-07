@@ -1,9 +1,10 @@
+use bit_register::{NumBytes, TryFromBits, TryIntoBits, bit_register};
+
 use crate::{
     MctpPacketError,
     error::MctpPacketResult,
     medium::{MctpMedium, MctpMediumFrame, util::Zero},
 };
-use bit_register::{NumBytes, TryFromBits, TryIntoBits, bit_register};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct SmbusEspiMedium;

@@ -1,7 +1,9 @@
-use crate::endpoint_id::EndpointId;
-use crate::mctp_message_tag::MctpMessageTag;
-use crate::mctp_sequence_number::MctpSequenceNumber;
 use bit_register::bit_register;
+
+use crate::{
+    endpoint_id::EndpointId, mctp_message_tag::MctpMessageTag,
+    mctp_sequence_number::MctpSequenceNumber,
+};
 
 bit_register! {
     #[derive(Debug, Default, PartialEq, Eq, Copy, Clone)]
@@ -28,7 +30,8 @@ mod tests {
             0b0000_0001, // reserved, header version (1)
             0b0000_1001, // destination endpoint id (9)
             0b0001_0010, // source endpoint id (18)
-            0b0000_0101, // start of message, end of message, packet sequence number (0), tag owner, message tag
+            0b0000_0101, /* start of message, end of message, packet sequence number (0), tag
+                          * owner, message tag */
         ]))
         .unwrap();
 

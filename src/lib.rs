@@ -8,7 +8,6 @@ mod error;
 mod mctp_command_code;
 mod mctp_completion_code;
 mod mctp_message_tag;
-mod mctp_message_type;
 mod mctp_packet_context;
 pub mod mctp_sequence_number;
 mod mctp_transport_header;
@@ -18,15 +17,17 @@ mod serialize;
 #[cfg(test)]
 mod test_util;
 
-pub use crate::error::MctpPacketError;
-use crate::error::MctpPacketResult;
-pub use crate::mctp_message_tag::MctpMessageTag;
-pub use crate::mctp_packet_context::MctpPacketContext;
-pub use crate::mctp_packet_context::MctpReplyContext;
-pub use crate::mctp_sequence_number::MctpSequenceNumber;
-pub use crate::medium::MctpMedium;
 pub use endpoint_id::EndpointId;
 pub use message_type::*;
+
+use crate::error::MctpPacketResult;
+pub use crate::{
+    error::MctpPacketError,
+    mctp_message_tag::MctpMessageTag,
+    mctp_packet_context::{MctpPacketContext, MctpReplyContext},
+    mctp_sequence_number::MctpSequenceNumber,
+    medium::MctpMedium,
+};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct MctpMessage<'buffer, M: MctpMedium> {
@@ -58,12 +59,13 @@ impl<'buffer, M: MctpMedium> MctpMessage<'buffer, M> {
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
+
     use super::*;
     use crate::{
         error::ProtocolError, mctp_command_code::MctpControlCommandCode,
         mctp_packet_context::MctpPacketContext, test_util::*,
     };
-    use pretty_assertions::assert_eq;
 
     struct Packet(&'static [u8]);
     const GET_ENDPOINT_ID_PACKET_NO_EOM: Packet = Packet(&[
@@ -80,7 +82,8 @@ mod tests {
         0b0000_0000, // completion code
         // message body:
         0b0000_1111, // endpoint id (15)
-        0b0000_0001, // endpoint type (simple = 0b00) / endpoint id type (static eid supported = 0b01)
+        0b0000_0001, /* endpoint type (simple = 0b00) / endpoint id type (static eid supported =
+                      * 0b01) */
         0b1111_0000, // medium specific
     ]);
 
@@ -130,7 +133,8 @@ mod tests {
                 },
                 MctpControl::GetEndpointIdResponse([
                     0b0000_1111, // endpoint id (15)
-                    0b0000_0001, // endpoint type (simple = 0b00) / endpoint id type (static eid supported = 0b01)
+                    0b0000_0001, /* endpoint type (simple = 0b00) / endpoint id type (static eid
+                                  * supported = 0b01) */
                     0b1111_0000, // medium specific
                 ]),
             )
@@ -516,8 +520,8 @@ mod tests {
             0b0000_0001, // mctp reserved, header version
             0b0000_1001, // destination endpoint id (9)
             0b0001_0110, // source endpoint id (22)
-            0b1110_0011, // som (1), eom (1), seq (0), to, tag (3)
-                         // No message header (need 4 more bytes)
+            0b1110_0011, /* som (1), eom (1), seq (0), to, tag (3)
+                          * No message header (need 4 more bytes) */
         ];
 
         let result = context.deserialize_packet(&incomplete_packet);
@@ -532,7 +536,8 @@ mod tests {
 
     #[test]
     fn test_serialize_buffer_underflow() {
-        // Test serialization with buffer too small for serializing the packet and having enough buffer for assembling packets
+        // Test serialization with buffer too small for serializing the packet and having enough
+        // buffer for assembling packets
         let mut tiny_buffer = [0u8; 4]; // Too small for 4-byte transport header
         let mut context = MctpPacketContext::<TestMedium>::new(TestMedium::new(), &mut tiny_buffer);
 
