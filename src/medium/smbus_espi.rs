@@ -6,12 +6,12 @@ use crate::{
 use bit_register::{NumBytes, TryFromBits, TryIntoBits, bit_register};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-struct SmbusEspiMedium;
+pub struct SmbusEspiMedium;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-struct SmbusEspiReplyContext {
-    destination_slave_address: u8,
-    source_slave_address: u8,
+pub struct SmbusEspiReplyContext {
+    pub destination_slave_address: u8,
+    pub source_slave_address: u8,
 }
 
 impl MctpMedium for SmbusEspiMedium {
@@ -140,7 +140,7 @@ bit_register! {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-struct SmbusEspiMediumFrame {
+pub struct SmbusEspiMediumFrame {
     header: SmbusEspiMediumHeader,
     pec: u8,
 }

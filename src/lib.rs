@@ -1,19 +1,19 @@
 #![no_std]
 #![allow(dead_code)]
-extern crate std;
+// extern crate std;
 
 mod deserialize;
-mod endpoint_id;
+pub mod endpoint_id;
 mod error;
 mod mctp_command_code;
 mod mctp_completion_code;
 mod mctp_message_tag;
 mod mctp_message_type;
 mod mctp_packet_context;
-mod mctp_sequence_number;
+pub mod mctp_sequence_number;
 mod mctp_transport_header;
-mod medium;
-mod message_type;
+pub mod medium;
+pub mod message_type;
 mod serialize;
 #[cfg(test)]
 mod test_util;
