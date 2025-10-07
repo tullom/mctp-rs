@@ -1,6 +1,6 @@
 use crate::error::MctpPacketResult;
 
-mod smbus_espi;
+pub mod smbus_espi;
 mod util;
 
 pub trait MctpMedium: Sized {
